@@ -566,11 +566,42 @@ body {
     padding: 0.8rem 0;
   }
 
+  /* Pin the theme + palette controls to the brand row. They live inside
+     .site-nav, which scrolls horizontally on mobile — without this they sit
+     ~100px past the right edge and are effectively undiscoverable. .site-nav
+     is position:static, so its overflow does not clip an absolutely positioned
+     descendant; the containing block is .site-header (position:relative). */
+  .nav-controls {
+    position: absolute;
+    top: 0.55rem;
+    right: 0;
+  }
+
   .site-nav {
     width: 100%;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 0.65rem;
     overflow-x: auto;
+    /* Hide the scrollbar but keep the strip swipeable. */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .site-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Fade the trailing edge so the swipe affordance is visible — iOS shows no
+     scrollbar, so without this the S&Y link reads as simply missing. */
+  .site-nav::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 2.25rem;
+    height: 2.4rem;
+    background: linear-gradient(90deg, transparent, var(--bg-nav) 75%);
+    pointer-events: none;
   }
 
   .site-nav a {
