@@ -12,7 +12,6 @@ const heroTitle = "SMIT3Y.XYZ";
 // (reuses the same reveal mechanism as everything else, see global.css).
 const kineticWords = (text: string) => text.split(" ");
 const researchEntries = loadResearchEntries();
-const featuredResearchEntries = researchEntries.slice(0, 6);
 const experienceEntries = [
   {
     period: "PRESENT",
@@ -268,7 +267,7 @@ const snyFounders = [
     </div>
     <div class="research-grid">
       {
-        featuredResearchEntries.map((entry, index) => (
+        researchEntries.map((entry, index) => (
           <a
             class="research-card glow-card"
             href={entry.href}
@@ -283,8 +282,19 @@ const snyFounders = [
               {entry.stockLabel || entry.title.split(" ")[0]}
             </span>
             <span class="research-card-title">{entry.title}</span>
-            <span class="research-card-arrow" aria-hidden="true">
-              {entry.url ? "↗" : "→"}
+            <span class="research-card-footer">
+              {entry.date && (
+                <time class="research-card-date" datetime={entry.date}>
+                  {new Date(entry.date).toLocaleDateString("en-US", {
+                    month: "short",
+                    year: "numeric",
+                    timeZone: "UTC",
+                  })}
+                </time>
+              )}
+              <span class="research-card-arrow" aria-hidden="true">
+                {entry.url ? "↗" : "→"}
+              </span>
             </span>
           </a>
         ))
@@ -1328,9 +1338,25 @@ const snyFounders = [
     line-height: 1.35;
   }
 
-  .research-card-arrow {
-    align-self: flex-end;
+  .research-card-footer {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
     margin-top: auto;
+    padding-top: 1.35rem;
+  }
+
+  .research-card-date {
+    color: var(--text-period);
+    font-family: Inconsolata, monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .research-card-arrow {
+    margin-left: auto;
     color: var(--accent);
     font-family: Inconsolata, monospace;
     font-size: 1.1rem;
