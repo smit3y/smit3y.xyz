@@ -1349,3 +1349,20 @@ body {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* Small tag above a research card's label (e.g. "Published" for
+   externally published pieces). Shared by the homepage and /research. */
+.research-card-badge {
+  align-self: flex-start;
+  margin-bottom: 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  font-family: Inconsolata, monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  padding: 0.35rem 0.65rem;
+  text-transform: uppercase;
+}

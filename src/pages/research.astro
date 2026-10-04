@@ -31,7 +31,14 @@ const pageHref = (page: number) =>
     <div class="research-list-grid">
       {
         pageEntries.map((entry) => (
-          <a class="research-list-card" href={`/research/${entry.slug}`}>
+          <a
+            class="research-list-card"
+            href={entry.href}
+            {...(entry.url && { target: "_blank", rel: "noopener noreferrer" })}
+          >
+            {entry.badge && (
+              <span class="research-card-badge">{entry.badge}</span>
+            )}
             <span class="research-card-label">
               {entry.stockLabel || entry.title.split(" ")[0]}
             </span>
@@ -45,7 +52,7 @@ const pageHref = (page: number) =>
                 : "No upload date"}
             </span>
             <span class="research-card-arrow" aria-hidden="true">
-              →
+              {entry.url ? "↗" : "→"}
             </span>
           </a>
         ))

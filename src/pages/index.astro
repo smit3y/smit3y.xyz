@@ -215,15 +215,10 @@ const snyFounders = [
             runner.
           </p>
           <p class="about-paragraph" data-reveal style="--i: 5">
-            Doing research is what I find joy in, and participating in the most
-            competitive probability game known as the United States Capital
-            Markets is what I find myself doing most of the week.
-          </p>
-          <p class="about-paragraph" data-reveal style="--i: 6">
             My close friends call me Smitty, and that is where I have derived
             the name for this website.
           </p>
-          <div class="about-signoff" data-reveal style="--i: 7">
+          <div class="about-signoff" data-reveal style="--i: 6">
             <p class="about-signoff__welcome">Welcome to</p>
             <p class="about-signoff__line">
               <span class="about-signoff__prompt" aria-hidden="true">&gt;</span>
@@ -276,16 +271,20 @@ const snyFounders = [
         featuredResearchEntries.map((entry, index) => (
           <a
             class="research-card glow-card"
-            href={`/research/${entry.slug}`}
+            href={entry.href}
+            {...(entry.url && { target: "_blank", rel: "noopener noreferrer" })}
             data-reveal
             style={`--i: ${index}`}
           >
+            {entry.badge && (
+              <span class="research-card-badge">{entry.badge}</span>
+            )}
             <span class="research-card-label">
               {entry.stockLabel || entry.title.split(" ")[0]}
             </span>
             <span class="research-card-title">{entry.title}</span>
             <span class="research-card-arrow" aria-hidden="true">
-              →
+              {entry.url ? "↗" : "→"}
             </span>
           </a>
         ))
