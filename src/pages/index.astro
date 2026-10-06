@@ -1,9 +1,8 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import { loadResearchEntries } from "../lib/research";
-import smit3yImage from "../assets/smit3y.jpg";
 import LetterGlitch from "../components/LetterGlitchWaves.tsx";
-import AboutCarousel from "../components/AboutCarousel.astro";
+import AboutCollage from "../components/AboutCollage.astro";
 import NumberRain from "../components/NumberRain.astro";
 
 const heroTitle = "SMIT3Y.XYZ";
@@ -185,10 +184,7 @@ const snyFounders = [
       </div>
       <div class="about-content">
         <div class="about-aside">
-          <div class="about-image-wrapper">
-            <img src={smit3yImage.src} alt="Eli Robinson" class="about-image" />
-          </div>
-          <AboutCarousel />
+          <AboutCollage />
         </div>
         <div class="about-text">
           <p class="about-paragraph about-paragraph-lead" data-reveal style="--i: 0">
@@ -1026,25 +1022,6 @@ const snyFounders = [
     width: clamp(26rem, 42vw, 34rem);
   }
 
-  .about-image-wrapper {
-    display: none;
-    position: relative;
-    width: clamp(16.5rem, 28vw, 22rem);
-    aspect-ratio: 1;
-    border: 1px solid var(--border-3);
-    border-radius: 12px;
-    background: var(--bg-img);
-    overflow: hidden;
-    box-shadow: 0 0 0 1px var(--border-img);
-  }
-
-  .about-image {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: center 16%;
-  }
-
   .about-text {
     display: flex;
     flex-direction: column;
@@ -1835,13 +1812,6 @@ const snyFounders = [
 
     .about-aside {
       display: contents;
-    }
-
-    .about-image-wrapper {
-      display: block;
-      order: 1;
-      width: clamp(14rem, 55vw, 18rem);
-      border-radius: 12px;
     }
 
     .about-text {
