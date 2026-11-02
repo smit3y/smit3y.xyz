@@ -1,0 +1,376 @@
+---
+// The chain rail: a mini neon skyline of every block, strung on the same
+// cable as the city. A packet rides it to whichever block you're on.
+import { BLOCKS, NODE_COLORS } from "../lib/chain";
+
+interface Props {
+  index: number;
+}
+
+const { index } = Astro.props;
+const prev = BLOCKS[index - 1];
+const next = BLOCKS[index + 1];
+const n = BLOCKS.length;
+const c = NODE_COLORS[index];
+
+// tiny tower glyphs, one per landmark (28×28, ground at y=26)
+const ICONS: Record<string, string> = {
+  home: "M9 26V9h10v17M8 9h12M11 13h2m2 0h2m-6 4h2m2 0h2m-6 4h2m2 0h2",
+  exchange: "M5 26V15h3v-3h3V8h6v4h3v3h3v11M14 3.2a1.8 1.8 0 1 1 0 .1M11 19h6",
+  research: "M7 26V13a7 7 0 0 1 14 0v13M14 6l5-4.5M10 17h2m4 0h2m-8 4h2m4 0h2",
+  sny: "M9 26V13l5-9 5 9v13M14 13.5a2.5 2.5 0 1 1 0 .1M12 21h4",
+  arena: "M3 26v-7q11-11 22 0v7M9 22h10",
+  pending: "M8 26V12h9v14M8 16h9M8 20h9M22 26V4M13 4h12M17 4v5",
+};
+---
+
+<nav class="bp-walk" aria-label="Walk the chain" data-rail data-rail-index={index} style={`--c:${c}`}>
+  <div class="rail">
+    {
+      prev ? (
+        <a class="rail-step rail-step--prev" href={prev.href} rel="prev" style={`--sc:${NODE_COLORS[index - 1]}`}>
+          <span class="rail-arrow" aria-hidden="true">‹</span>
+          <span class="rail-txt"><small>parent · #{index - 1}</small>{prev.label}</span>
+        </a>
+      ) : (
+        <a class="rail-step rail-step--prev" href="/" data-rail-city style="--sc:#a78bfa">
+          <span class="rail-arrow" aria-hidden="true">‹</span>
+          <span class="rail-txt"><small>genesis</small>the city</span>
+        </a>
+      )
+    }
+
+    <div class="rail-track" style={`--n:${n}`}>
+      <span class="rail-cable" aria-hidden="true"></span>
+      <span class="rail-lit" aria-hidden="true" data-rail-lit></span>
+      <span class="rail-packet" aria-hidden="true" data-rail-packet></span>
+      <ol class="rail-nodes">
+        {
+          BLOCKS.map((b, i) => (
+            <li>
+              <a
+                class:list={["rail-node", i === index && "is-current", b.scene === "pending" && "is-pending"]}
+                href={b.href}
+                style={`--nc:${NODE_COLORS[i]}`}
+                data-cube={b.id}
+                aria-current={i === index ? "page" : undefined}
+                aria-label={`Block #${i}: ${b.label}`}
+              >
+                <svg viewBox="0 0 28 28" aria-hidden="true"><path d={ICONS[b.scene] ?? ICONS.home} /></svg>
+                <span class="rail-tip" aria-hidden="true">#{i} {b.label}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    {
+      next ? (
+        <a class="rail-step rail-step--next" href={next.href} rel="next" style={`--sc:${NODE_COLORS[index + 1]}`}>
+          <span class="rail-txt"><small>child · #{index + 1}</small>{next.label}</span>
+          <span class="rail-arrow" aria-hidden="true">›</span>
+        </a>
+      ) : (
+        <a class="rail-step rail-step--next" href="/" data-rail-city style="--sc:#a78bfa">
+          <span class="rail-txt"><small>tip</small>the city</span>
+          <span class="rail-arrow" aria-hidden="true">↩</span>
+        </a>
+      )
+    }
+  </div>
+</nav>
+
+<style>
+  .bp-walk {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    display: grid;
+    justify-items: center;
+    padding: 1.25rem max(16px, env(safe-area-inset-right, 0px)) calc(0.85rem + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    pointer-events: none;
+    view-transition-name: bp-rail;
+  }
+
+  .rail {
+    display: grid;
+    grid-template-columns: minmax(0, 11rem) minmax(0, auto) minmax(0, 11rem);
+    align-items: center;
+    gap: 0.9rem;
+    max-width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, #07061a 82%, transparent);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--c) 12%, transparent),
+      0 0 28px color-mix(in srgb, var(--c) 22%, transparent),
+      0 12px 32px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px) saturate(1.3);
+    pointer-events: auto;
+    transition: border-color 400ms ease, box-shadow 400ms ease;
+  }
+
+  .rail-step {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    padding: 0.35rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--sc) 40%, transparent);
+    border-radius: 999px;
+    color: #eef0ff;
+    font: 700 0.82rem/1.1 Inconsolata, monospace;
+    text-decoration: none;
+    transition: background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  }
+
+  .rail-step--next {
+    justify-content: flex-end;
+    text-align: right;
+  }
+
+  .rail-step:hover,
+  .rail-step:focus-visible {
+    border-color: var(--sc);
+    background: color-mix(in srgb, var(--sc) 16%, transparent);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--sc) 40%, transparent);
+    outline: none;
+  }
+
+  .rail-step--prev:hover { transform: translateX(-2px); }
+  .rail-step--next:hover { transform: translateX(2px); }
+
+  .rail-arrow {
+    color: var(--sc);
+    font-size: 1.35rem;
+    line-height: 0.8;
+    text-shadow: 0 0 8px var(--sc);
+  }
+
+  .rail-txt {
+    display: grid;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rail-txt small {
+    color: color-mix(in srgb, var(--sc) 70%, #c9c6ef);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* ── the mini skyline ── */
+  .rail-track {
+    --gap: 2.6rem;
+    position: relative;
+    width: calc(var(--n) * var(--gap));
+    height: 2.6rem;
+  }
+
+  .rail-nodes {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(var(--n), 1fr);
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .rail-nodes li {
+    display: grid;
+    place-items: end center;
+  }
+
+  /* the cable runs roof to roof, just like the skyline */
+  .rail-cable,
+  .rail-lit {
+    position: absolute;
+    top: 0.42rem;
+    left: calc(var(--gap) / 2);
+    height: 2px;
+    border-radius: 2px;
+  }
+
+  .rail-cable {
+    right: calc(var(--gap) / 2);
+    background: linear-gradient(90deg, #ff5aa8, #4c8dff, #17d4c8, #ffcb05, #ffb02e, #a78bfa);
+    opacity: 0.28;
+  }
+
+  .rail-lit {
+    width: 0;
+    background: linear-gradient(90deg, #ff5aa8, var(--c));
+    box-shadow: 0 0 8px var(--c);
+    transition: width 900ms cubic-bezier(0.65, 0, 0.35, 1);
+  }
+
+  .rail-packet {
+    position: absolute;
+    top: calc(0.42rem + 1px);
+    left: calc(var(--gap) / 2);
+    z-index: 2;
+    width: 0.55rem;
+    height: 0.55rem;
+    margin: -0.275rem 0 0 -0.275rem;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 45%, transparent), 0 0 14px 4px var(--c);
+    transition: left 900ms cubic-bezier(0.65, 0, 0.35, 1);
+  }
+
+  .rail-node {
+    position: relative;
+    display: grid;
+    width: 2.2rem;
+    height: 2.3rem;
+    place-items: end center;
+    color: var(--nc);
+    opacity: 0.5;
+    text-decoration: none;
+    transition: opacity 200ms ease, transform 200ms ease, filter 200ms ease;
+  }
+
+  .rail-node svg {
+    width: 100%;
+    height: 100%;
+    fill: color-mix(in srgb, var(--nc) 10%, transparent);
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.5;
+  }
+
+  .rail-node.is-visited {
+    opacity: 0.85;
+  }
+
+  .rail-node.is-visited svg {
+    fill: color-mix(in srgb, var(--nc) 28%, transparent);
+  }
+
+  .rail-node.is-pending svg {
+    stroke-dasharray: 2 2.2;
+  }
+
+  .rail-node:hover,
+  .rail-node:focus-visible {
+    opacity: 1;
+    outline: none;
+    transform: translateY(-3px);
+    filter: drop-shadow(0 0 6px var(--nc));
+  }
+
+  .rail-node.is-current {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.12);
+    filter: drop-shadow(0 0 7px var(--nc));
+  }
+
+  .rail-node.is-current svg {
+    fill: color-mix(in srgb, var(--nc) 38%, transparent);
+  }
+
+  .rail-tip {
+    position: absolute;
+    bottom: calc(100% + 0.55rem);
+    left: 50%;
+    padding: 0.25rem 0.55rem;
+    border: 1px solid var(--nc);
+    border-radius: 999px;
+    background: #07061a;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--nc) 45%, transparent);
+    color: #fff;
+    font: 700 0.7rem/1 Inconsolata, monospace;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 4px);
+    transition: opacity 150ms ease, transform 150ms ease;
+    white-space: nowrap;
+  }
+
+  .rail-node:hover .rail-tip,
+  .rail-node:focus-visible .rail-tip {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  :global(html:not([data-theme="dark"])) .rail {
+    /* the rail is a piece of the night city, so it stays dark in light mode too */
+    color-scheme: dark;
+  }
+
+  @media (max-width: 760px) {
+    .rail {
+      grid-template-columns: auto minmax(0, auto) auto;
+      gap: 0.35rem;
+      padding: 0.35rem;
+    }
+
+    .rail-track {
+      --gap: clamp(1.9rem, 9.5vw, 2.4rem);
+    }
+
+    .rail-node {
+      width: 1.8rem;
+      height: 1.9rem;
+    }
+
+    .rail-txt {
+      display: none;
+    }
+
+    .rail-step {
+      width: 2.3rem;
+      height: 2.3rem;
+      justify-content: center;
+      padding: 0;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+    .rail-lit,
+    .rail-packet {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  const LAST = "smit3y-rail-last";
+  // the packet rides from the block you came from to this one
+  document.addEventListener("astro:page-load", () => {
+    const rail = document.querySelector<HTMLElement>("[data-rail]");
+    if (!rail) return;
+    const i = Number(rail.dataset.railIndex);
+    const packet = rail.querySelector<HTMLElement>("[data-rail-packet]");
+    const lit = rail.querySelector<HTMLElement>("[data-rail-lit]");
+    const place = (k: number) => {
+      if (packet) packet.style.left = `calc(var(--gap) * ${k + 0.5})`;
+      if (lit) lit.style.width = `calc(var(--gap) * ${k})`;
+    };
+    let from = i;
+    try {
+      const v = sessionStorage.getItem(LAST);
+      if (v !== null && !Number.isNaN(Number(v))) from = Number(v);
+      sessionStorage.setItem(LAST, String(i));
+    } catch {}
+    if (packet) packet.style.transition = lit!.style.transition = "none";
+    place(from);
+    void rail.offsetWidth;
+    if (packet) packet.style.transition = lit!.style.transition = "";
+    requestAnimationFrame(() => place(i));
+  });
+  // leaving to the city resets the ride
+  document.addEventListener("astro:after-swap", () => {
+    if (!document.querySelector("[data-rail]")) {
+      try {
+        sessionStorage.removeItem("smit3y-rail-last");
+      } catch {}
+    }
+  });
+</script>

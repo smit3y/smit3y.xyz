@@ -1,20 +1,38 @@
 ---
 import { fallbackItems } from "../lib/ticker/fallback";
 const tickerItems = fallbackItems;
+
+// Each nav item is a block (or group of blocks) on the chain.
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+const navItems = [
+  { label: "Home", href: "/", match: (p: string) => p === "/" },
+  { label: "About", href: "/about", match: (p: string) => p === "/about" },
+  { label: "Research", href: "/research", match: (p: string) => p.startsWith("/research") },
+  { label: "Experience", href: "/experience", match: (p: string) => p.startsWith("/experience") },
+  { label: "S&Y", href: "/sny", match: (p: string) => p === "/sny" },
+];
+const isClassic = path === "/classic";
 ---
 
-<div class="site-chrome">
+<div class="site-chrome" transition:persist="site-chrome">
   <header class="site-header" aria-label="Site header">
-    <a class="brand-mark" href="/#home" aria-label="smit3y.xyz home">
+    <a class="brand-mark" href="/" data-nav-home aria-label="smit3y.xyz home">
       <span class="brand-icon" aria-hidden="true">S3</span>
       <span>smit3y.xyz</span>
     </a>
     <nav class="site-nav" aria-label="Primary navigation">
-      <a class="is-active magnetic" href="/#home" aria-current="page">Home</a>
-      <a class="magnetic" href="/#about">About</a>
-      <a class="magnetic" href="/#research">Research</a>
-      <a class="magnetic" href="/#experience">Experience</a>
-      <a class="magnetic" href="/#sny">S&amp;Y</a>
+      {
+        navItems.map((item) => (
+          <a
+            class:list={["magnetic", item.match(path) && "is-active"]}
+            href={item.href}
+            data-nav-home={item.href === "/" ? "" : undefined}
+            aria-current={item.match(path) ? "page" : undefined}
+          >
+            {item.label}
+          </a>
+        ))
+      }
       <div class="nav-controls">
         <button class="theme-toggle" type="button" aria-label="Toggle light/dark theme">
           <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -101,84 +119,21 @@ const tickerItems = fallbackItems;
     </div>
   </div>
 </div>
-<nav class="section-dots" aria-label="Section progress">
-  <a class="is-active" href="/#home" aria-label="Home" aria-current="page"></a>
-  <a href="/#about" aria-label="About"></a>
-  <a href="/#research" aria-label="Research"></a>
-  <a href="/#experience" aria-label="Experience"></a>
-  <a href="/#sny" aria-label="S and Y"></a>
-</nav>
+{
+  isClassic && (
+    <nav class="section-dots" aria-label="Section progress">
+      <a class="is-active" href="#home" aria-label="Home" aria-current="page"></a>
+      <a href="#about" aria-label="About"></a>
+      <a href="#research" aria-label="Research"></a>
+      <a href="#experience" aria-label="Experience"></a>
+      <a href="#sny" aria-label="S and Y"></a>
+    </nav>
+  )
+}
 
 <script>
-  const navLinks = Array.from(
-    document.querySelectorAll<HTMLAnchorElement>(".site-nav a"),
-  );
-  const dotLinks = Array.from(
-    document.querySelectorAll<HTMLAnchorElement>(".section-dots a"),
-  );
-  const sectionLinks = [...navLinks, ...dotLinks];
-
-  const setActiveSection = (id: string) => {
-    for (const link of sectionLinks) {
-      const isActive = link.hash === `#${id}`;
-      link.classList.toggle("is-active", isActive);
-
-      if (isActive) {
-        link.setAttribute("aria-current", "page");
-      } else {
-        link.removeAttribute("aria-current");
-      }
-    }
-  };
-
-  for (const link of sectionLinks) {
-    link.addEventListener("click", () => {
-      const id = link.hash.slice(1);
-      if (id) setActiveSection(id);
-    });
-  }
-
-  const sectionTargets = navLinks
-    .map((link) => document.querySelector<HTMLElement>(link.hash))
-    .filter((section): section is HTMLElement => section !== null);
-
-  const updateActiveSectionFromScroll = () => {
-    if (sectionTargets.length === 0) return;
-
-    const marker = window.innerHeight * 0.42;
-    let activeSection = sectionTargets[0];
-
-    for (let index = sectionTargets.length - 1; index >= 0; index -= 1) {
-      const section = sectionTargets[index];
-      const rect = section.getBoundingClientRect();
-
-      if (rect.top <= marker) {
-        activeSection = section;
-        break;
-      }
-    }
-
-    setActiveSection(activeSection.id);
-  };
-
-  let scrollFrame = 0;
-  window.addEventListener(
-    "scroll",
-    () => {
-      window.cancelAnimationFrame(scrollFrame);
-      scrollFrame = window.requestAnimationFrame(updateActiveSectionFromScroll);
-    },
-    { passive: true },
-  );
-
-  window.addEventListener("resize", updateActiveSectionFromScroll);
-
-  if ("fonts" in document) {
-    document.fonts.ready.then(updateActiveSectionFromScroll);
-  } else {
-    updateActiveSectionFromScroll();
-  }
-
+  // The nav is persisted across client-side navigation, so its own
+  // listeners are bound once; page-dependent bits re-run on every page.
   const themeToggle = document.querySelector<HTMLButtonElement>(".theme-toggle");
   themeToggle?.addEventListener("click", () => {
     const html = document.documentElement;
@@ -190,6 +145,78 @@ const tickerItems = fallbackItems;
       html.setAttribute("data-theme", next);
     }
     localStorage.setItem("theme", next);
+  });
+
+  const matchers: Array<[string, (p: string) => boolean]> = [
+    ["/", (p) => p === "/"],
+    ["/about", (p) => p === "/about"],
+    ["/research", (p) => p.startsWith("/research")],
+    ["/experience", (p) => p.startsWith("/experience")],
+    ["/sny", (p) => p === "/sny"],
+  ];
+
+  let pageAbort: AbortController | null = null;
+
+  document.addEventListener("astro:page-load", () => {
+    pageAbort?.abort();
+    pageAbort = new AbortController();
+    const { signal } = pageAbort;
+
+    // "home" is whichever hub this visit uses (3D chain, pixel or neon city)
+    const mode = document.documentElement.dataset.worldMode;
+    const hub = mode === "pixel" ? "/city" : "/";
+    document.querySelectorAll<HTMLAnchorElement>("[data-nav-home]").forEach((a) => a.setAttribute("href", hub));
+
+    // active nav item for the current page
+    const path = location.pathname.replace(/\/$/, "") || "/";
+    for (const link of document.querySelectorAll<HTMLAnchorElement>(".site-nav a")) {
+      const m = matchers.find(([href]) => href === link.getAttribute("href"));
+      const active = link.hasAttribute("data-nav-home") ? path === hub : !!m && m[1](path);
+      link.classList.toggle("is-active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }
+
+    // section dots (classic page only) track scroll position
+    const dotLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(".section-dots a"));
+    if (!dotLinks.length) return;
+    const setActiveSection = (id: string) => {
+      for (const link of dotLinks) {
+        const isActive = link.hash === `#${id}`;
+        link.classList.toggle("is-active", isActive);
+        if (isActive) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      }
+    };
+    for (const link of dotLinks) {
+      link.addEventListener("click", () => {
+        const id = link.hash.slice(1);
+        if (id) setActiveSection(id);
+      }, { signal });
+    }
+    const sectionTargets = dotLinks
+      .filter((link) => link.hash.length > 1)
+      .map((link) => document.querySelector<HTMLElement>(link.hash))
+      .filter((section): section is HTMLElement => section !== null);
+    const update = () => {
+      if (!sectionTargets.length) return;
+      const marker = window.innerHeight * 0.42;
+      let active = sectionTargets[0];
+      for (let i = sectionTargets.length - 1; i >= 0; i -= 1) {
+        if (sectionTargets[i].getBoundingClientRect().top <= marker) {
+          active = sectionTargets[i];
+          break;
+        }
+      }
+      setActiveSection(active.id);
+    };
+    let frame = 0;
+    window.addEventListener("scroll", () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    }, { passive: true, signal });
+    window.addEventListener("resize", update, { signal });
+    update();
   });
 </script>
 
@@ -464,10 +491,12 @@ const tickerItems = fallbackItems;
     }
   }
 
-  if (!reduceMotion.matches) {
-    const magneticEls = Array.from(document.querySelectorAll<HTMLElement>(".magnetic"));
+  const bindMagnetic = () => {
+    if (reduceMotion.matches) return;
+    const magneticEls = Array.from(document.querySelectorAll<HTMLElement>(".magnetic:not([data-mag-bound])"));
 
     for (const el of magneticEls) {
+      el.dataset.magBound = "";
       // Small elements (nav links, buttons) want a strong, snappy pull;
       // large ones (the hero title) need a much gentler one or the offset
       // gets huge near the edges. Override per-element via data attrs.
@@ -489,13 +518,15 @@ const tickerItems = fallbackItems;
         el.style.setProperty("--my", "0px");
       });
     }
-  }
+  };
 
   // Glow card: tracks the cursor across .glow-card elements and exposes
   // the position as --gx/--gy percentages for a radial-gradient in CSS.
-  const glowCards = Array.from(document.querySelectorAll<HTMLElement>(".glow-card"));
+  const bindGlowCards = () => {
+  const glowCards = Array.from(document.querySelectorAll<HTMLElement>(".glow-card:not([data-glow-bound])"));
 
   for (const card of glowCards) {
+    card.dataset.glowBound = "";
     card.addEventListener("mousemove", (e) => {
       const rect = card.getBoundingClientRect();
       const gx = ((e.clientX - rect.left) / rect.width) * 100;
@@ -504,6 +535,12 @@ const tickerItems = fallbackItems;
       card.style.setProperty("--gy", `${gy}%`);
     });
   }
+  };
+
+  document.addEventListener("astro:page-load", () => {
+    bindMagnetic();
+    bindGlowCards();
+  });
 
   // Cursor trail: a fading comet streak drawn on <canvas>, following the
   // mouse across the whole site. Skipped on touch devices (no real mouse)

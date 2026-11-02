@@ -1366,3 +1366,98 @@ body {
   padding: 0.35rem 0.65rem;
   text-transform: uppercase;
 }
+
+/* Client-side page swaps: a quick content crossfade. The world canvas keeps
+   its own transition name and is shown live (never snapshotted), so the
+   camera keeps flying while the page changes around it. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 260ms;
+}
+
+::view-transition-old(world),
+::view-transition-old(world-pixel),
+::view-transition-old(world-neon),
+::view-transition-old(site-chrome) {
+  display: none;
+}
+
+::view-transition-new(site-chrome) {
+  animation: none;
+}
+
+.site-chrome {
+  view-transition-name: site-chrome;
+}
+
+::view-transition-new(world),
+::view-transition-new(world-pixel),
+::view-transition-new(world-neon) {
+  animation: none;
+}
+
+/* only the world this visit uses is shown (see BaseLayout's world mode) */
+html:not([data-world-mode="pixel"]) [data-engine="pixel"],
+html:not([data-world-mode="neon"]) [data-engine="neon"] {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
+
+/* riding the chain tower to tower: the page content slides the way you're
+   heading while the world's camera glides along the cable */
+::view-transition-old(bp-rail) {
+  display: none;
+}
+
+::view-transition-new(bp-rail) {
+  animation: none;
+}
+
+html[data-walk] ::view-transition-old(root),
+html[data-walk] ::view-transition-new(root) {
+  animation-duration: 180ms;
+}
+
+html[data-walk] ::view-transition-old(bp-meta),
+html[data-walk] ::view-transition-old(bp-body) {
+  animation: walk-out 300ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+html[data-walk] ::view-transition-new(bp-meta) {
+  animation: walk-in 620ms cubic-bezier(0.16, 1, 0.3, 1) 120ms both;
+}
+
+html[data-walk] ::view-transition-new(bp-body) {
+  animation: walk-in 620ms cubic-bezier(0.16, 1, 0.3, 1) 200ms both;
+}
+
+html[data-walk] ::view-transition-group(bp-meta),
+html[data-walk] ::view-transition-group(bp-body) {
+  animation: none;
+}
+
+html[data-walk="next"] { --walk: 1; }
+html[data-walk="prev"] { --walk: -1; }
+
+@keyframes walk-out {
+  to {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateX(calc(var(--walk, 1) * -64px));
+  }
+}
+
+@keyframes walk-in {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateX(calc(var(--walk, 1) * 80px));
+  }
+}

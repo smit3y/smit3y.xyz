@@ -1,0 +1,270 @@
+---
+// Block #6 — still in the mempool. The one block visitors can add to.
+import BlockPage from "../layouts/BlockPage.astro";
+---
+
+<BlockPage index={5} title="What's next · smit3y.xyz">
+  <section class="nx" aria-labelledby="nx-title">
+    <div class="nx-shell">
+      <p class="section-kicker">// MEMPOOL</p>
+      <h2 id="nx-title">The next block hasn't been mined yet.</h2>
+      <p class="nx-lead">
+        If you're building something, hiring, or just want to talk markets,
+        crypto, or ball, send a transaction.
+      </p>
+
+      <div class="nx-pool" role="group" aria-label="Contact">
+        <div class="nx-pool-head" aria-hidden="true">
+          <span class="nx-pulse"></span>
+          <span>mempool</span>
+          <span class="nx-pool-meta">3 pending · awaiting your signature</span>
+        </div>
+        <ul class="nx-txs">
+          <li>
+            <a class="nx-tx" href="https://www.linkedin.com/in/ssam-smith/" target="_blank" rel="noopener noreferrer me">
+              <span class="nx-tx-id" aria-hidden="true">0x01</span>
+              <span class="nx-tx-main">
+                <span class="nx-tx-kind">LinkedIn</span>
+                <span class="nx-tx-name">in/ssam-smith</span>
+              </span>
+              <span class="nx-tx-go">connect <span aria-hidden="true">→</span></span>
+            </a>
+          </li>
+          <li>
+            <a class="nx-tx" href="https://x.com/smit3y_" target="_blank" rel="noopener noreferrer me">
+              <span class="nx-tx-id" aria-hidden="true">0x02</span>
+              <span class="nx-tx-main">
+                <span class="nx-tx-kind">X</span>
+                <span class="nx-tx-name">@smit3y_</span>
+              </span>
+              <span class="nx-tx-go">follow <span aria-hidden="true">→</span></span>
+            </a>
+          </li>
+          <li>
+            <button class="nx-tx" type="button" data-copy-email="ssamsmit@umich.edu">
+              <span class="nx-tx-id" aria-hidden="true">0x03</span>
+              <span class="nx-tx-main">
+                <span class="nx-tx-kind">Email</span>
+                <span class="nx-tx-name">ssamsmit@umich.edu</span>
+              </span>
+              <span class="nx-tx-go" data-copied aria-live="polite">copy <span aria-hidden="true">⧉</span></span>
+            </button>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</BlockPage>
+
+<style>
+  .nx {
+    padding-block: clamp(3rem, 7vw, 5rem);
+  }
+
+  .nx-shell {
+    display: grid;
+    gap: 1.1rem;
+    width: min(100% - 2 * max(16px, env(safe-area-inset-left, 0px)), 46rem);
+    margin: 0 auto;
+  }
+
+  .nx h2 {
+    margin: 0;
+    color: var(--text-heading);
+    font-size: clamp(1.7rem, 3.6vw, 2.5rem);
+    line-height: 1.15;
+    text-wrap: balance;
+  }
+
+  .nx-lead {
+    max-width: 38rem;
+    margin: 0;
+    color: var(--text-lead);
+    font-size: 1.05rem;
+    line-height: 1.6;
+  }
+
+  .nx-pool {
+    --ink: var(--c-ink, var(--c, var(--accent)));
+    margin-top: 0.75rem;
+    border: 1px dashed color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border-6));
+    border-radius: 0.9rem;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--c, var(--accent)) 9%, transparent), transparent 60%),
+      var(--bg-card);
+    box-shadow: 0 0 34px -14px color-mix(in srgb, var(--c, var(--accent)) 60%, transparent);
+    overflow: hidden;
+  }
+
+  .nx-pool-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 1.1rem;
+    border-bottom: 1px dashed color-mix(in srgb, var(--c, var(--accent)) 35%, var(--border-6));
+    color: var(--ink);
+    font: 600 0.72rem/1 Inconsolata, monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .nx-pool-meta {
+    margin-left: auto;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: none;
+  }
+
+  .nx-pulse {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--c, var(--accent));
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c, var(--accent)) 60%, transparent);
+    animation: nx-pulse 1.8s ease-out infinite;
+  }
+
+  @keyframes nx-pulse {
+    to { box-shadow: 0 0 0 0.55rem transparent; }
+  }
+
+  .nx-txs {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .nx-txs li + li {
+    border-top: 1px solid color-mix(in srgb, var(--c, var(--accent)) 14%, var(--border-4));
+  }
+
+  .nx-tx {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    padding: 1rem 1.1rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-heading);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    transition: background-color 160ms ease;
+  }
+
+  .nx-tx::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--c, var(--accent));
+    box-shadow: 0 0 12px var(--c, var(--accent));
+    transform: scaleY(0);
+    transition: transform 200ms ease;
+  }
+
+  .nx-tx:hover,
+  .nx-tx:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--c, var(--accent)) 10%, transparent);
+  }
+
+  .nx-tx:hover::before,
+  .nx-tx:focus-visible::before {
+    transform: scaleY(1);
+  }
+
+  .nx-tx-id {
+    color: var(--text-dim);
+    font: 600 0.78rem/1 Inconsolata, monospace;
+  }
+
+  .nx-tx-main {
+    display: grid;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+
+  .nx-tx-kind {
+    color: var(--ink);
+    font: 600 0.7rem/1 Inconsolata, monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .nx-tx-name {
+    overflow: hidden;
+    font-weight: 700;
+    font-size: 1.05rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nx-tx-go {
+    padding: 0.4rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--c, var(--accent)) 45%, var(--border-6));
+    border-radius: 999px;
+    color: var(--ink);
+    font: 600 0.72rem/1 Inconsolata, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition: background-color 160ms ease, box-shadow 160ms ease;
+  }
+
+  .nx-tx:hover .nx-tx-go,
+  .nx-tx:focus-visible .nx-tx-go {
+    background: color-mix(in srgb, var(--c, var(--accent)) 18%, transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--c, var(--accent)) 40%, transparent);
+  }
+
+  .nx-tx-go.is-done {
+    border-color: #3ddc84;
+    color: #3ddc84;
+  }
+
+  @media (max-width: 520px) {
+    .nx-tx-id,
+    .nx-pool-meta {
+      display: none;
+    }
+    .nx-tx {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nx-pulse { animation: none; }
+  }
+</style>
+
+<script>
+  document.addEventListener("astro:page-load", () => {
+    for (const el of document.querySelectorAll<HTMLButtonElement>("[data-copy-email]")) {
+      const tag = el.querySelector<HTMLElement>("[data-copied]");
+      if (!tag) continue;
+      const idle = tag.innerHTML;
+      let timer = 0;
+      el.addEventListener("click", async () => {
+        let ok = true;
+        try {
+          await navigator.clipboard.writeText(el.dataset.copyEmail ?? "");
+        } catch {
+          ok = false;
+        }
+        tag.textContent = ok ? "copied ✓" : "copy failed";
+        tag.classList.toggle("is-done", ok);
+        clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          tag.innerHTML = idle;
+          tag.classList.remove("is-done");
+        }, 1600);
+      });
+    }
+  });
+</script>

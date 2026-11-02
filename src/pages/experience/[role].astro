@@ -1,0 +1,19 @@
+---
+// One page per role, each its own block on the chain.
+import BlockPage from "../../layouts/BlockPage.astro";
+import SiteSections from "../../components/SiteSections.astro";
+import { experienceEntries } from "../../lib/site-data";
+
+export function getStaticPaths() {
+  // S&Y has its own block page (/sny); the other roles live here
+  return experienceEntries
+    .filter((e) => e.slug !== "sny" && e.block !== null)
+    .map((e) => ({ params: { role: e.slug }, props: { slug: e.slug, block: e.block as number, org: e.organization } }));
+}
+
+const { slug, block, org } = Astro.props;
+---
+
+<BlockPage index={block} title={`${org} · smit3y.xyz`}>
+  <SiteSections only={["experience"]} roles={[slug]} />
+</BlockPage>

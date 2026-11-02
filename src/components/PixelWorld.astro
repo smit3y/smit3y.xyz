@@ -1,0 +1,2442 @@
+---
+// Pixel Skyline — the persistent 2D world for the pixel city. The whole
+// scene is drawn at low resolution into an offscreen canvas, then blitted
+// up with crisp pixels through a camera: the homepage shows the full
+// skyline, and each block page zooms into that chapter's building. Kept
+// alive across client-side navigation (transition:persist).
+import { BLOCKS } from "../lib/chain";
+---
+
+<div class="world pw" data-world-pixel data-engine="pixel" data-blocks={JSON.stringify(BLOCKS)} transition:persist="world-pixel" aria-hidden="true">
+  <canvas class="pw-canvas"></canvas>
+</div>
+
+<style>
+  .pw {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: #04041a;
+    pointer-events: none;
+    view-transition-name: world-pixel;
+  }
+
+  :global(:root[data-theme="light"]) .pw {
+    background: #78aef0;
+  }
+
+  .pw-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
+</style>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+  import { prefetch } from "astro:prefetch";
+  import { VISITED_KEY } from "../lib/chain";
+  type RGB = [number, number, number];
+
+  // ── 3×5 pixel font ───────────────────────────────────────────────────
+  const FONT_SRC: Record<string, string> = {
+    A: ".#. #.# ### #.# #.#", B: "##. #.# ##. #.# ##.", C: ".## #.. #.. #.. .##",
+    D: "##. #.# #.# #.# ##.", E: "### #.. ##. #.. ###", F: "### #.. ##. #.. #..",
+    G: ".## #.. #.# #.# .##", H: "#.# #.# ### #.# #.#", I: "### .#. .#. .#. ###",
+    J: "..# ..# ..# #.# .#.", K: "#.# #.# ##. #.# #.#", L: "#.. #.. #.. #.. ###",
+    M: "#.# ### ### #.# #.#", N: "#.# ##. ### .## #.#", O: ".#. #.# #.# #.# .#.",
+    P: "##. #.# ##. #.. #..", Q: ".#. #.# #.# ##. .##", R: "##. #.# ##. #.# #.#",
+    S: ".## #.. .#. ..# ##.", T: "### .#. .#. .#. .#.", U: "#.# #.# #.# #.# ###",
+    V: "#.# #.# #.# #.# .#.", W: "#.# #.# ### ### #.#", X: "#.# #.# .#. #.# #.#",
+    Y: "#.# #.# .#. .#. .#.", Z: "### ..# .#. #.. ###",
+    "0": "### #.# #.# #.# ###", "1": ".#. ##. .#. .#. ###", "2": "##. ..# .#. #.. ###",
+    "3": "##. ..# .#. ..# ##.", "4": "#.# #.# ### ..# ..#", "5": "### #.. ##. ..# ##.",
+    "6": ".## #.. ### #.# ###", "7": "### ..# .#. .#. .#.", "8": "### #.# ### #.# ###",
+    "9": "### #.# ### ..# ##.",
+    $: ".## ##. .#. .## ##.", "%": "#.# ..# .#. #.. #.#", "+": "... .#. ### .#. ...",
+    "-": "... ... ### ... ...", ".": "... ... ... ... .#.", ",": "... ... ... .#. #..",
+    ":": "... .#. ... .#. ...", "#": "#.# ### #.# ### #.#", "&": ".#. #.# .#. #.# .##",
+    "·": "... ... .#. ... ...", "/": "..# ..# .#. #.. #..", "!": ".#. .#. .#. ... .#.",
+    "?": "##. ..# .#. ... .#.", "'": ".#. .#. ... ... ...", " ": "... ... ... ... ...",
+  };
+  const FONT: Record<string, Array<[number, number]>> = {};
+  for (const [ch, src] of Object.entries(FONT_SRC)) {
+    const px: Array<[number, number]> = [];
+    src.split(" ").forEach((row, y) => [...row].forEach((c, x) => c === "#" && px.push([x, y])));
+    FONT[ch] = px;
+  }
+  const textWidth = (s: string) => Math.max(0, s.length * 4 - 1);
+
+  const BAYER = [
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+  ];
+
+  function rng(seed: number) {
+    return () => {
+      seed |= 0;
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // ── colour helpers ───────────────────────────────────────────────────
+  const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!;
+  function toRGB(css: string, fallback: RGB): RGB {
+    if (!css) return fallback;
+    probe.clearRect(0, 0, 1, 1);
+    probe.fillStyle = "#000";
+    probe.fillStyle = css.trim();
+    probe.fillRect(0, 0, 1, 1);
+    const d = probe.getImageData(0, 0, 1, 1).data;
+    return [d[0], d[1], d[2]];
+  }
+  const hex = (c: RGB) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+  const mixRGB = (a: RGB, b: RGB, t: number): RGB => [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+  const mix = (a: string, b: string, t: number) => hex(mixRGB(toRGB(a, [0, 0, 0]), toRGB(b, [0, 0, 0]), t));
+
+  interface Pal {
+    light: boolean;
+    sky: RGB[];
+    star: string;
+    mountain: string;
+    ridge: string;
+    grid: string;
+    far: string;
+    farWin: string;
+    mid: string;
+    midWin: string;
+    body: string[];
+    edge: string;
+    shade: string;
+    winOff: string;
+    winWarm: string;
+    winCool: string;
+    stone: string;
+    stoneHl: string;
+    stoneSh: string;
+    interior: string;
+    sidewalk: string;
+    road: string;
+    lane: string;
+    quay: string;
+    quayHl: string;
+    water: string;
+    lamp: string;
+    ink: string;
+    cloud: string;
+    gold: string;
+    goldHl: string;
+    goldSh: string;
+    wood: string;
+    up: string;
+    down: string;
+    maize: string;
+    blue: string;
+    accent: string;
+    g1: string;
+    g2: string;
+    g3: string;
+  }
+
+  function readPalette(): Pal {
+    const root = document.documentElement;
+    const cs = getComputedStyle(root);
+    const light = root.getAttribute("data-theme") === "light";
+    const accent = hex(toRGB(cs.getPropertyValue("--accent"), [139, 92, 246]));
+    const g1 = hex(toRGB(cs.getPropertyValue("--g1"), [135, 145, 255]));
+    const g2 = hex(toRGB(cs.getPropertyValue("--g2"), [94, 161, 242]));
+    const g3 = hex(toRGB(cs.getPropertyValue("--g3"), [23, 191, 209]));
+    const shared = {
+      accent, g1, g2, g3,
+      gold: "#f6c445", goldHl: "#fff0a8", goldSh: "#b07a1c",
+      up: "#3ddc84", down: "#ff5a5f", maize: "#ffcb05", blue: "#00274c",
+    };
+    if (light) {
+      return {
+        ...shared,
+        light,
+        sky: [toRGB("#78aef0", [0, 0, 0]), toRGB("#a8cdf7", [0, 0, 0]), toRGB("#d7e8fb", [0, 0, 0]), mixRGB(toRGB("#fde9d7", [0, 0, 0]), toRGB(accent, [0, 0, 0]), 0.12)],
+        star: "#ffffff",
+        mountain: mix("#c3cfeb", accent, 0.06),
+        ridge: g3,
+        grid: "#6f86b8",
+        far: "#aebbdc",
+        farWin: "#c9d5ef",
+        mid: "#94a3cb",
+        midWin: "#c2d2ee",
+        body: ["#7482b5", "#6a79ad", "#7f8cbe", "#6573a6"],
+        edge: "#a4b0da",
+        shade: "#56648f",
+        winOff: "#56669a",
+        winWarm: "#dfeaff",
+        winCool: "#f4f8ff",
+        stone: "#e4dfd2",
+        stoneHl: "#fffaf0",
+        stoneSh: "#b4ad9d",
+        interior: "#3b4166",
+        sidewalk: "#bcc3da",
+        road: "#4b5170",
+        lane: "#eef0f7",
+        quay: "#98a1c0",
+        quayHl: "#d3d8ea",
+        water: "#3a6aa8",
+        lamp: "#fff3c4",
+        ink: "#1b1f36",
+        cloud: "#ffffff",
+        wood: "#d39a5c",
+      };
+    }
+    return {
+      ...shared,
+      light,
+      sky: [toRGB("#04041a", [0, 0, 0]), toRGB("#0c0a29", [0, 0, 0]), toRGB("#1b1240", [0, 0, 0]), mixRGB(toRGB("#2e1a4f", [0, 0, 0]), toRGB(accent, [0, 0, 0]), 0.22)],
+      star: "#f3f0ff",
+      mountain: mix("#120f2e", accent, 0.05),
+      ridge: g3,
+      grid: "#3a3670",
+      far: "#141235",
+      farWin: "#3b3570",
+      mid: "#1b1945",
+      midWin: "#b98b45",
+      body: ["#23214e", "#292659", "#201e47", "#2d295e"],
+      edge: "#3d3974",
+      shade: "#17153a",
+      winOff: "#131232",
+      winWarm: "#ffcf73",
+      winCool: "#a9d4ff",
+      stone: "#6e6a98",
+      stoneHl: "#a29bcb",
+      stoneSh: "#46426e",
+      interior: "#0d0b22",
+      sidewalk: "#2c2953",
+      road: "#100f26",
+      lane: "#4a4672",
+      quay: "#34305f",
+      quayHl: "#4f4a85",
+      water: "#060818",
+      lamp: "#ffd98a",
+      ink: "#05040f",
+      cloud: "#2a2453",
+      wood: "#b9773f",
+    };
+  }
+
+  // ── types ────────────────────────────────────────────────────────────
+  interface Landmark { id: string; x: number; w: number; top: number; hitTop: number }
+  interface Win { x: number; y: number; w: number; h: number; lit: boolean; warm: boolean }
+  interface Filler {
+    x: number; w: number; h: number; tone: number; style: "grid" | "glass" | "slim";
+    roof: "none" | "antenna" | "tank" | "ac" | "setback"; wins: Win[]; shop: boolean; awning: string;
+  }
+  interface Sign { x: number; y: number; word: string; color: string; seed: number }
+  interface Star { x: number; y: number; b: number; phase: number; big: boolean }
+  interface Car { x: number; lane: 0 | 1; speed: number; color: string; coin: boolean }
+  interface Particle {
+    kind: "coin" | "dust" | "text"; x: number; y: number; vx: number; vy: number;
+    born: number; life: number; text?: string; color?: string;
+  }
+  interface TickerSeg { text: string; color: string }
+
+  const ANCHOR_BLOCK = 26286454;
+  const ANCHOR_TS = 1793133059;
+  const SLOT = 12;
+
+
+  type Cam = { s: number; ax: number; ay: number };
+  // block index → landmark, left to right in chain order
+  const IDS = ["home", "exchange", "library", "mint", "arena", "pending"];
+  const ease = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+  const clampN = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  function season() {
+    const d = new Date();
+    const m = d.getMonth() + 1, day = d.getDate();
+    if ((m === 10 && day >= 20) || (m === 11 && day <= 2)) return "halloween";
+    if (m === 12 || m <= 2) return "winter";
+    return "";
+  }
+  const moonPhase = () => (((Date.now() - 947182440000) / 86400000 / 29.530588853) % 1 + 1) % 1;
+
+  class PixelCity {
+    root: HTMLElement;
+    out: HTMLCanvasElement;
+    o: CanvasRenderingContext2D;
+    canvas = document.createElement("canvas");
+    g: CanvasRenderingContext2D;
+    blocks: Array<{ id: string; label: string; href: string }>;
+    tags: HTMLAnchorElement[] = [];
+    hubEl: HTMLElement | null = null;
+    copyEl: HTMLElement | null = null;
+    hintEl: HTMLElement | null = null;
+
+    s = 3; W = 480; H = 270; gY = 236; cx = 240; mobile = false;
+    dpr = 1; vw = 0; vh = 0; chromeH = 0; stageX = 0; stageY = 0; pan = 0; panMax = 0;
+    pal!: Pal;
+    sky = document.createElement("canvas");
+    back = document.createElement("canvas");
+    front = document.createElement("canvas");
+    ridge: number[] = [];
+    marks = new Map<string, Landmark>();
+    billboard = { x: 0, w: 44, h: 56 };
+    fillers: Filler[] = [];
+    flicker: Array<{ win: Win; until: number }> = [];
+    signs: Sign[] = [];
+    lamps: number[] = [];
+    stars: Star[] = [];
+    cars: Car[] = [];
+    clouds: Array<{ x: number; y: number; w: number; speed: number }> = [];
+    bits: Array<{ y: number; speed: number; items: Array<{ x: number; one: boolean; a: number }> }> = [];
+    crowd: Array<{ x: number; y: number; c: string }> = [];
+    homeLit: boolean[] = [];
+    towerLit: boolean[] = [];
+    libLit: boolean[] = [];
+    particles: Particle[] = [];
+    walkers: Array<{ x: number; dir: 1 | -1; speed: number; c: string; hair: string; dog: boolean; ph: number }> = [];
+    flakes: Array<{ x: number; y: number; v: number }> = [];
+    season = season();
+
+    hovered: string | null = null;
+    hoverSince = 0;
+    mineAt = -1e9;
+    lastLibState = "";
+    lastShot = -1;
+    score = [64, 58];
+    lastPress = 0;
+    lastCoinSpawn = 0;
+    lastStat = 0;
+    statIdx = 0;
+    shootingStar: { x: number; y: number; born: number } | null = null;
+    nextShooting = 0;
+    nextPlane = 6;
+
+    ticker: TickerSeg[] = [];
+    btcPrice = "";
+    marketUp = true;
+    anchorBlock = ANCHOR_BLOCK;
+    anchorTs = ANCHOR_TS;
+
+    state: "hub" | number = "hub";
+    cam: Cam = { s: 1, ax: 0, ay: 0 };
+    camAnim: { from: Cam; start: number; dur: number } | null = null;
+    hoverIdx = -1;
+    peek = -1;
+    peekEl: HTMLElement | null = null;
+    visited = new Set<string>();
+    tagSig = "";
+
+    reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    raf = 0;
+    lastFrame = 0;
+    lastT = 0;
+    abort = new AbortController();
+    pageAbort = new AbortController();
+    observers: Array<ResizeObserver | MutationObserver> = [];
+    timers: number[] = [];
+    lastSize = "";
+    touch: { x: number; y: number; pan: number; moved: boolean } | null = null;
+
+    constructor(root: HTMLElement) {
+      this.root = root;
+      this.out = root.querySelector("canvas")!;
+      this.o = this.out.getContext("2d")!;
+      this.g = this.canvas.getContext("2d")!;
+      this.blocks = JSON.parse(root.dataset.blocks || "[]");
+      this.pal = readPalette();
+      this.setTicker([
+        { symbol: "BTC", price: "$80,330.00", change: "+0.2%", isNegative: false },
+        { symbol: "ETH", price: "$2,133.85", change: "+1.0%", isNegative: false },
+        { symbol: "SOL", price: "$93.58", change: "+5.6%", isNegative: false },
+      ]);
+      this.layout();
+      this.bind();
+      this.tickClock();
+      this.loadMarket();
+      this.loadBlock();
+      this.timers.push(window.setInterval(() => this.tickClock(), 1000));
+      this.raf = requestAnimationFrame((t) => this.frame(t));
+    }
+
+    destroy() {
+      cancelAnimationFrame(this.raf);
+      this.abort.abort();
+      this.pageAbort.abort();
+      for (const o of this.observers) o.disconnect();
+      for (const t of this.timers) clearInterval(t);
+      this.peekEl?.remove();
+    }
+
+    // ── data ─────────────────────────────────────────────────────────
+    setTicker(items: Array<{ symbol: string; price: string; change: string; isNegative: boolean }>) {
+      const p = this.pal;
+      const pick = ["BTC", "ETH", "SOL", "HYPE", "LINK"];
+      const chosen = pick.map((s) => items.find((i) => i.symbol === s)).filter(Boolean) as typeof items;
+      const list = chosen.length ? chosen : items.slice(0, 5);
+      const segs: TickerSeg[] = [];
+      for (const it of list) {
+        const n = parseFloat(it.price.replace(/[$,]/g, ""));
+        const price = n >= 100 ? it.price.replace(/\.\d+$/, "") : it.price;
+        segs.push({ text: it.symbol + " ", color: "#ffffff" });
+        segs.push({ text: price + " ", color: "#b9b5d8" });
+        segs.push({ text: it.change + "   ·   ", color: it.isNegative ? p.down : p.up });
+      }
+      this.ticker = segs;
+      const btc = items.find((i) => i.symbol === "BTC");
+      if (btc) {
+        this.marketUp = !btc.isNegative;
+        const n = parseFloat(btc.price.replace(/[$,]/g, ""));
+        this.btcPrice = n >= 1000 ? (n / 1000).toFixed(1) + "K" : n.toFixed(0);
+      }
+    }
+
+    async loadMarket() {
+      try {
+        const res = await fetch("/api/ticker");
+        if (!res.ok) return;
+        const { data } = await res.json();
+        if (Array.isArray(data) && data.length) this.setTicker(data);
+      } catch {
+        // keep fallback prices
+      }
+    }
+
+    async loadBlock() {
+      try {
+        const res = await fetch("https://ethereum-rpc.publicnode.com", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBlockByNumber", params: ["latest", false] }),
+        });
+        const json = await res.json();
+        const n = parseInt(json?.result?.number, 16);
+        const ts = parseInt(json?.result?.timestamp, 16);
+        if (n > ANCHOR_BLOCK && ts > ANCHOR_TS) {
+          this.anchorBlock = n;
+          this.anchorTs = ts;
+        }
+      } catch {
+        // estimate from the baked-in anchor (one block per 12s slot)
+      }
+    }
+
+    blockNow(nowS = Date.now() / 1000) {
+      return this.anchorBlock + Math.floor((nowS - this.anchorTs) / SLOT);
+    }
+
+
+    // ── layout ───────────────────────────────────────────────────────
+    layout() {
+      const chrome = document.querySelector<HTMLElement>(".site-chrome");
+      this.chromeH = chrome ? chrome.offsetHeight : 0;
+      const cw = this.root.clientWidth, vh = this.root.clientHeight;
+      if (!cw || !vh) return;
+      this.vw = cw;
+      this.vh = vh;
+      const ch = Math.max(240, vh - this.chromeH);
+      this.mobile = cw <= 760;
+      // extra city past both edges, so a zoomed-in camera never finds the end
+      const M = 150;
+      if (this.mobile) {
+        this.s = 2;
+        this.W = Math.max(520, Math.ceil(cw / 2)) + M * 2;
+        this.H = Math.max(230, Math.ceil(ch / 2));
+      } else {
+        this.s = Math.max(1, Math.min(Math.round(cw / 480), Math.floor(ch / 230)));
+        this.W = Math.ceil(cw / this.s) + M * 2;
+        this.H = Math.max(200, Math.ceil(ch / this.s));
+      }
+      const { W, H, s } = this;
+      this.canvas.width = W;
+      this.canvas.height = H;
+      this.dpr = Math.min(2, window.devicePixelRatio || 1);
+      this.out.width = Math.round(cw * this.dpr);
+      this.out.height = Math.round(vh * this.dpr);
+      this.gY = H - 34;
+      this.cx = Math.floor(W / 2);
+      this.stageY = vh - H * s;
+      this.stageX = Math.floor((cw - W * s) / 2);
+      // phones look along the street by panning between the two edges
+      this.panMax = Math.max(0, ((W - M * 2) * s - cw) / 2);
+
+      // landmarks, left to right in chain order
+      const { cx, gY } = this;
+      this.marks.clear();
+      const mk = (id: string, x: number, w: number, top: number, hitTop = top) =>
+        this.marks.set(id, { id, x, w, top, hitTop });
+      mk("home", cx - 226, 44, gY - 91, gY - 80);
+      mk("exchange", cx - 178, 36, gY - 167, gY - 152);
+      mk("library", cx - 118, 40, gY - 104);
+      mk("mint", cx - 60, 63, gY - 50);
+      mk("arena", cx + 22, 78, gY - 54);
+      mk("pending", cx + 118, 44, gY - 112, gY - 86);
+      this.billboard.x = cx + 167;
+      if (!this.mobile) this.pan = 0;
+      this.pan = clampN(this.pan, -this.panMax, this.panMax);
+
+      this.buildWorld();
+      this.prerender();
+      this.tagSig = "";
+      if (!this.camAnim) this.cam = this.camTarget();
+      if (this.reduce) this.draw(performance.now(), true);
+    }
+
+    // art pixel → screen pixel, before the camera
+    bx(lx: number) {
+      return this.stageX - this.pan + this.s * lx;
+    }
+    by(ly: number) {
+      return this.stageY + this.s * ly;
+    }
+
+    buildWorld() {
+      const { W, H, gY, cx } = this;
+      const r = rng(31337);
+      const p = this.pal;
+
+      // price-chart ridge: a seeded random walk that trends up, with one
+      // sharp drawdown, sampled every 3px so it reads as a chart line
+      const n = Math.ceil(W / 3) + 2;
+      const walk: number[] = [];
+      let v = 0;
+      for (let i = 0; i < n; i++) {
+        const dip = i > n * 0.42 && i < n * 0.47 ? -2.6 : 0;
+        v += (r() - 0.44) * 2.4 + dip;
+        walk.push(v);
+      }
+      const lo = Math.min(...walk);
+      const hi = Math.max(...walk);
+      const endX = W - 198;
+      this.ridge = [];
+      for (let x = 0; x < W; x++) {
+        const fx = Math.min(x, endX) / 3;
+        const i = Math.floor(fx);
+        const t = fx - i;
+        const val = walk[i] + (walk[i + 1] - walk[i]) * t;
+        const norm = (val - lo) / (hi - lo || 1);
+        this.ridge.push(Math.round(gY - 30 - norm * 46));
+      }
+
+      // stars
+      this.stars = [];
+      const count = Math.floor((W * gY) / 320);
+      for (let i = 0; i < count; i++) {
+        const x = Math.floor(r() * W);
+        const y = Math.floor(r() * (gY - 50));
+        if (y > this.ridge[x] - 4) continue;
+        this.stars.push({ x, y, b: 0.35 + r() * 0.65, phase: r() * Math.PI * 2, big: r() < 0.035 });
+      }
+
+      this.clouds = [];
+      for (let i = 0; i < 4; i++) {
+        this.clouds.push({ x: r() * W, y: 14 + r() * (gY * 0.32), w: 18 + Math.floor(r() * 26), speed: 1 + r() * 1.6 });
+      }
+
+      // foreground fillers, packed into the gaps between landmarks
+      const occupied = [...this.marks.values()].map((m) => [m.x, m.x + m.w] as [number, number]);
+      occupied.push([this.billboard.x, this.billboard.x + this.billboard.w]);
+      occupied.sort((a, b) => a[0] - b[0]);
+      const gaps: Array<[number, number, boolean]> = [];
+      let prev = -2;
+      occupied.forEach(([a, b], i) => {
+        gaps.push([prev + 2, a - 2, i > 0]);
+        prev = b;
+      });
+      gaps.push([prev + 2, W + 4, false]);
+
+      this.fillers = [];
+      const rf = rng(90210);
+      const roofs: Filler["roof"][] = ["none", "antenna", "tank", "ac", "setback"];
+      const styles: Filler["style"][] = ["grid", "glass", "slim"];
+      for (const [a, b, inner] of gaps) {
+        let x = a;
+        while (b - x >= 7) {
+          let w = 12 + Math.floor(rf() * 13);
+          if (b - x - w < 9) w = b - x;
+          const far = Math.min(Math.abs(x - (cx - 200)), Math.abs(x - (cx + 220)));
+          const h = inner ? 26 + Math.floor(rf() * 24) : 34 + Math.floor(rf() * (far > 60 ? 46 : 34));
+          const f: Filler = {
+            x, w: w - 1, h,
+            tone: Math.floor(rf() * 4),
+            style: styles[Math.floor(rf() * styles.length)],
+            roof: roofs[Math.floor(rf() * roofs.length)],
+            wins: [], shop: rf() < 0.55,
+            awning: [p.g1, p.g2, p.g3, p.accent][Math.floor(rf() * 4)],
+          };
+          this.makeWindows(f, rf);
+          this.fillers.push(f);
+          x += w;
+        }
+      }
+
+      // vertical neon signs on a few of the taller outer buildings
+      const words = ["HODL", "GM", "SATS", "24/7", "BUIDL", "WAGMI", "GAS", "DEFI"];
+      const neon = [p.g1, p.g2, p.g3, p.accent];
+      this.signs = [];
+      const tall = this.fillers.filter((f) => f.h >= 44 && f.w >= 13);
+      tall.forEach((f, i) => {
+        if (i % 2) return;
+        const word = words[(i / 2) % words.length];
+        const len = word.length * 6 + 3;
+        if (len > f.h - 12) return;
+        this.signs.push({ x: f.x - 2, y: gY - f.h + 7, word, color: neon[(i / 2) % neon.length], seed: i * 7.13 });
+      });
+
+      // street lamps — skip the doorways of landmarks
+      const mk2 = (id: string, dx: number) => this.marks.get(id)!.x + dx;
+      const doors = [mk2("exchange", 18), mk2("library", 20), mk2("mint", 31), mk2("arena", 39), mk2("home", 31), mk2("pending", 22)];
+      this.lamps = [];
+      for (let x = 7; x < W; x += 23) {
+        if (doors.some((d) => Math.abs(d - x) < 6)) continue;
+        this.lamps.push(x);
+      }
+
+      const carColors = [p.g1, p.g2, "#e8e6f5", p.accent, "#7b78a6", p.g3];
+      this.cars = [];
+      for (let i = 0; i < 7; i++) {
+        const lane = (i % 2) as 0 | 1;
+        this.cars.push({
+          x: r() * W, lane,
+          speed: (lane ? 1 : -1) * (13 + r() * 14),
+          color: carColors[i % carColors.length],
+          coin: r() < 0.6,
+        });
+      }
+
+      // people out on the sidewalk, a few walking dogs
+      const shirts = [p.g1, p.g2, p.g3, p.accent, p.maize, "#e85d75", "#e8e6f5"];
+      const hairs = ["#2a1a12", "#5a3a22", "#d9b46a", "#111111", "#8a4b2a"];
+      this.walkers = [];
+      for (let i = 0; i < Math.round(W / 34); i++) {
+        this.walkers.push({
+          x: r() * W, dir: r() < 0.5 ? 1 : -1, speed: 3 + r() * 4,
+          c: shirts[Math.floor(r() * shirts.length)], hair: hairs[Math.floor(r() * hairs.length)],
+          dog: r() < 0.15, ph: r() * 10,
+        });
+      }
+      this.flakes = [];
+
+      // the data river: rows of 0s and 1s drifting downstream
+      this.bits = [];
+      for (let row = 0; row < 5; row++) {
+        const items: Array<{ x: number; one: boolean; a: number }> = [];
+        let x = r() * 10;
+        while (x < W + 20) {
+          items.push({ x, one: r() < 0.55, a: 0.12 + r() * 0.3 });
+          x += 5 + r() * 16;
+        }
+        this.bits.push({ y: gY + 16 + row * 4, speed: 5 + row * 2.6 + r() * 3, items });
+      }
+
+      const crowdColors = [p.maize, "#4f7fd6", "#e8e6f5", "#c98a6b", p.maize, "#2f5cb8"];
+      this.crowd = [];
+      const ar = this.marks.get("arena")!;
+      for (let row = 0; row < 3; row++) {
+        for (let x = ar.x + 14 + (row % 2); x < ar.x + 64; x += 2) {
+          if (r() < 0.82) this.crowd.push({ x, y: gY - 22 + row * 2, c: crowdColors[Math.floor(r() * crowdColors.length)] });
+        }
+      }
+
+      const lr = rng(4242);
+      this.towerLit = Array.from({ length: 400 }, () => lr() < 0.42);
+      this.libLit = Array.from({ length: 80 }, () => lr() < 0.6);
+      this.homeLit = Array.from({ length: 24 }, () => lr() < 0.5);
+      void H;
+    }
+
+    makeWindows(f: Filler, r: () => number) {
+      const { gY } = this;
+      const top = gY - f.h + 4;
+      const bottom = gY - (f.shop ? 7 : 3);
+      if (f.style === "grid") {
+        for (let y = top; y < bottom - 1; y += 4)
+          for (let x = f.x + 2; x < f.x + f.w - 2; x += 4)
+            f.wins.push({ x, y, w: 2, h: 2, lit: r() < 0.34, warm: r() < 0.8 });
+      } else if (f.style === "slim") {
+        for (let y = top; y < bottom - 2; y += 5)
+          for (let x = f.x + 2; x < f.x + f.w - 1; x += 3)
+            f.wins.push({ x, y, w: 1, h: 3, lit: r() < 0.3, warm: r() < 0.7 });
+      } else {
+        for (let y = top; y < bottom - 1; y += 3)
+          for (let x = f.x + 1; x < f.x + f.w - 1; x += 2)
+            f.wins.push({ x, y, w: 1, h: 2, lit: r() < 0.22, warm: r() < 0.35 });
+      }
+    }
+
+    // ── primitive drawing ────────────────────────────────────────────
+    R(x: number, y: number, w: number, h: number, c: string) {
+      if (w <= 0 || h <= 0) return;
+      this.g.fillStyle = c;
+      this.g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+    P(x: number, y: number, c: string) {
+      this.g.fillStyle = c;
+      this.g.fillRect(Math.round(x), Math.round(y), 1, 1);
+    }
+    T(str: string, x: number, y: number, c: string) {
+      const g = this.g;
+      g.fillStyle = c;
+      let cx = Math.round(x);
+      const yy = Math.round(y);
+      for (const ch of str.toUpperCase()) {
+        const glyph = FONT[ch] ?? FONT[" "];
+        for (const [gx, gy] of glyph) g.fillRect(cx + gx, yy + gy, 1, 1);
+        cx += 4;
+      }
+    }
+    disc(x: number, y: number, r: number, c: string) {
+      for (let dy = -r; dy <= r; dy++) {
+        const dx = Math.floor(Math.sqrt(r * r - dy * dy));
+        this.R(x - dx, y + dy, dx * 2 + 1, 1, c);
+      }
+    }
+    glow(x: number, y: number, r: number, c: string, a: number) {
+      const g = this.g;
+      const prev = g.globalAlpha;
+      g.globalAlpha = a;
+      for (let k = r; k >= 1; k -= 2) this.disc(x, y, k, c);
+      g.globalAlpha = prev;
+    }
+    alpha<T>(a: number, fn: () => T) {
+      const prev = this.g.globalAlpha;
+      this.g.globalAlpha = prev * a;
+      fn();
+      this.g.globalAlpha = prev;
+    }
+    withCtx(ctx: CanvasRenderingContext2D, fn: () => void) {
+      const prev = this.g;
+      this.g = ctx;
+      fn();
+      this.g = prev;
+    }
+
+    // ── static layers ────────────────────────────────────────────────
+    prerender() {
+      const { W, H, gY, pal: p } = this;
+      for (const c of [this.sky, this.back, this.front]) {
+        c.width = W;
+        c.height = H;
+      }
+
+      // sky: banded gradient, Bayer-dithered between bands
+      const sctx = this.sky.getContext("2d")!;
+      const img = sctx.createImageData(W, H);
+      const stops = p.sky;
+      const col = (t: number): RGB => {
+        const seg = Math.min(stops.length - 2, Math.floor(t * (stops.length - 1)));
+        const local = t * (stops.length - 1) - seg;
+        return mixRGB(stops[seg], stops[seg + 1], local);
+      };
+      const bands = 14;
+      for (let y = 0; y < H; y++) {
+        const t = Math.min(1, y / gY);
+        const lv = t * bands;
+        const base = Math.floor(lv);
+        const frac = lv - base;
+        const A = col(base / bands);
+        const B = col(Math.min(1, (base + 1) / bands));
+        for (let x = 0; x < W; x++) {
+          const c = BAYER[y & 3][x & 3] / 16 < frac ? B : A;
+          const i = (y * W + x) * 4;
+          img.data[i] = c[0];
+          img.data[i + 1] = c[1];
+          img.data[i + 2] = c[2];
+          img.data[i + 3] = 255;
+        }
+      }
+      sctx.putImageData(img, 0, 0);
+
+      // chart gridlines in the sky
+      this.withCtx(sctx, () => {
+        this.alpha(p.light ? 0.28 : 0.4, () => {
+          for (let y = gY - 26; y > gY - 92; y -= 13)
+            for (let x = 0; x < W; x += 3) this.P(x, y, p.grid);
+        });
+      });
+
+      // back layer: chart mountains, far + mid skylines
+      const bctx = this.back.getContext("2d")!;
+      bctx.clearRect(0, 0, W, H);
+      this.withCtx(bctx, () => {
+        const r = rng(777);
+        for (let x = 0; x < W; x++) this.R(x, this.ridge[x], 1, gY - this.ridge[x], p.mountain);
+        // area-chart glow under the line
+        for (let d = 1; d <= 7; d++)
+          this.alpha(0.16 * (1 - d / 8), () => {
+            for (let x = 0; x < W; x++) this.P(x, this.ridge[x] + d, p.ridge);
+          });
+        this.alpha(0.85, () => {
+          for (let x = 0; x < W - 1; x++) {
+            const a = this.ridge[x];
+            const b = this.ridge[x + 1];
+            this.R(x, Math.min(a, b), 1, Math.abs(b - a) + 1, p.ridge);
+          }
+        });
+
+        // far skyline
+        for (let x = -4; x < W; ) {
+          const w = 6 + Math.floor(r() * 11);
+          const h = 18 + Math.floor(r() * 30);
+          this.R(x, gY - h, w, h, p.far);
+          if (r() < 0.3) this.R(x + Math.floor(w / 2), gY - h - 4, 1, 4, p.far);
+          for (let y = gY - h + 3; y < gY - 2; y += 3)
+            for (let wx = x + 1; wx < x + w - 1; wx += 2) if (r() < 0.1) this.P(wx, y, p.farWin);
+          x += w;
+        }
+        // mid skyline
+        for (let x = -6; x < W; ) {
+          const w = 8 + Math.floor(r() * 14);
+          const h = 26 + Math.floor(r() * 44);
+          this.R(x, gY - h, w, h, p.mid);
+          this.R(x + w - 1, gY - h, 1, h, mix(p.mid, p.edge, 0.4));
+          if (r() < 0.25) {
+            this.R(x + 2, gY - h - 5, w - 4, 5, p.mid);
+            if (r() < 0.5) this.R(x + Math.floor(w / 2), gY - h - 11, 1, 6, p.mid);
+          }
+          this.alpha(p.light ? 0.5 : 0.75, () => {
+            for (let y = gY - h + 3; y < gY - 3; y += 3)
+              for (let wx = x + 2; wx < x + w - 2; wx += 3) if (r() < 0.2) this.P(wx, y, p.midWin);
+          });
+          x += w + (r() < 0.2 ? 2 : 0);
+        }
+      });
+
+      // front layer: filler buildings
+      const fctx = this.front.getContext("2d")!;
+      fctx.clearRect(0, 0, W, H);
+      this.withCtx(fctx, () => {
+        for (const f of this.fillers) this.drawFiller(f);
+        this.drawBillboardBuilding();
+      });
+    }
+
+    drawFiller(f: Filler) {
+      const { gY, pal: p } = this;
+      const body = p.body[f.tone];
+      const top = gY - f.h;
+      this.R(f.x, top, f.w, f.h, body);
+      this.R(f.x + f.w - 1, top, 1, f.h, p.edge);
+      this.R(f.x, top, 1, f.h, p.shade);
+      this.R(f.x, top, f.w, 1, p.edge);
+
+      for (const w of f.wins) {
+        const c = w.lit ? (w.warm ? p.winWarm : p.winCool) : p.winOff;
+        this.R(w.x, w.y, w.w, w.h, c);
+      }
+      if (f.style === "glass") {
+        this.alpha(0.5, () => {
+          for (let y = top + 3; y < gY - 3; y += 3) this.R(f.x + 1, y + 2, f.w - 2, 1, p.shade);
+        });
+      }
+
+      if (f.shop) {
+        this.R(f.x + 1, gY - 5, f.w - 2, 5, p.interior);
+        this.alpha(p.light ? 0.4 : 0.85, () => this.R(f.x + 2, gY - 4, f.w - 4, 3, p.winWarm));
+        for (let x = f.x + 1; x < f.x + f.w - 1; x++) this.P(x, gY - 6, (x - f.x) % 2 ? f.awning : p.stoneHl);
+      }
+
+      const mid = f.x + Math.floor(f.w / 2);
+      switch (f.roof) {
+        case "antenna":
+          this.R(mid, top - 7, 1, 7, p.shade);
+          this.R(mid - 1, top - 4, 3, 1, p.shade);
+          break;
+        case "tank":
+          this.R(f.x + 2, top - 2, 1, 2, p.shade);
+          this.R(f.x + 6, top - 2, 1, 2, p.shade);
+          this.R(f.x + 2, top - 6, 5, 4, p.stoneSh);
+          this.R(f.x + 3, top - 7, 3, 1, p.stoneSh);
+          this.R(f.x + 2, top - 4, 5, 1, p.shade);
+          break;
+        case "ac":
+          this.R(f.x + 2, top - 2, 3, 2, p.stoneSh);
+          this.R(f.x + f.w - 6, top - 3, 4, 3, p.stoneSh);
+          break;
+        case "setback":
+          if (f.w > 12) {
+            this.R(f.x + 3, top - 5, f.w - 6, 5, p.body[(f.tone + 1) % 4]);
+            this.R(f.x + 3, top - 5, f.w - 6, 1, p.edge);
+          }
+          break;
+      }
+    }
+
+    drawBillboardBuilding() {
+      const { gY, pal: p } = this;
+      const { x, w, h } = this.billboard;
+      const top = gY - h;
+      this.R(x, top, w, h, p.body[1]);
+      this.R(x + w - 1, top, 1, h, p.edge);
+      this.R(x, top, 1, h, p.shade);
+      this.R(x, top, w, 1, p.edge);
+      const r = rng(55);
+      for (let y = top + 4; y < gY - 8; y += 4)
+        for (let wx = x + 3; wx < x + w - 3; wx += 4)
+          this.R(wx, y, 2, 2, r() < 0.35 ? (r() < 0.8 ? p.winWarm : p.winCool) : p.winOff);
+      this.R(x + 1, gY - 6, w - 2, 6, p.interior);
+      this.alpha(p.light ? 0.4 : 0.85, () => this.R(x + 3, gY - 5, w - 6, 4, p.winCool));
+      // billboard legs
+      this.R(x + 8, top - 4, 1, 4, p.shade);
+      this.R(x + w - 9, top - 4, 1, 4, p.shade);
+      this.R(x + 4, top - 2, w - 8, 1, p.shade);
+    }
+
+    // ── frame ────────────────────────────────────────────────────────
+    camTarget(): Cam {
+      if (this.state === "hub") return { s: 1, ax: 0, ay: -window.scrollY };
+      const m = this.marks.get(IDS[this.state]);
+      if (!m) return { s: 1, ax: 0, ay: 0 };
+      const a = document.querySelector<HTMLElement>("[data-world-anchor]");
+      const r = a ? a.getBoundingClientRect() : { left: this.vw * 0.52, top: this.vh * 0.15, width: this.vw * 0.42, height: this.vh * 0.55 };
+      const extra = m.id === "pending" ? 20 : 6;
+      const x0 = this.bx(m.x - extra), x1 = this.bx(m.x + m.w + extra);
+      const y0 = this.by(m.top - 10), y1 = this.by(this.gY + 4);
+      const fit = Math.min((r.width * 0.84) / (x1 - x0), (r.height * 0.94) / (y1 - y0));
+      // land on a whole number of screen pixels per art pixel so it stays crisp
+      const total = clampN(Math.round(fit * this.s), this.s, 12);
+      const cs = total / this.s;
+      const snap = (v: number) => Math.round(v * this.dpr) / this.dpr;
+      return { s: cs, ax: snap(r.left + r.width / 2 - ((x0 + x1) / 2) * cs), ay: snap(r.top + r.height * 0.52 - ((y0 + y1) / 2) * cs) };
+    }
+
+    frame(nowMs: number) {
+      this.raf = requestAnimationFrame((t) => this.frame(t));
+      if (document.hidden) return;
+      // the art ticks at 30fps like the original; the camera glides at full rate
+      if (this.reduce) {
+        if (!this.lastFrame) {
+          this.lastFrame = nowMs;
+          this.draw(nowMs, true);
+        }
+      } else if (nowMs - this.lastFrame >= 1000 / 30) {
+        this.lastFrame = nowMs;
+        this.draw(nowMs, false);
+      }
+      const target = this.camTarget();
+      if (this.camAnim) {
+        const u = clampN((nowMs - this.camAnim.start) / this.camAnim.dur, 0, 1);
+        const e = this.reduce ? 1 : ease(u);
+        const f = this.camAnim.from;
+        const lift = Math.sin(u * Math.PI) * 0.1 * Math.abs(target.s - f.s);
+        this.cam = { s: f.s + (target.s - f.s) * e - lift, ax: f.ax + (target.ax - f.ax) * e, ay: f.ay + (target.ay - f.ay) * e };
+        if (u >= 1) this.camAnim = null;
+      } else this.cam = target;
+      this.blit();
+      if (this.state === "hub") this.placeTags();
+    }
+
+    blit() {
+      const { o, dpr, cam, s, vw, vh } = this;
+      o.setTransform(dpr, 0, 0, dpr, 0, 0);
+      o.imageSmoothingEnabled = false;
+      o.fillStyle = hex(this.pal.sky[0]);
+      o.fillRect(0, 0, vw, vh);
+      const k = cam.s * s;
+      const x = cam.ax + cam.s * (this.stageX - this.pan);
+      const y = cam.ay + cam.s * this.stageY;
+      o.drawImage(this.canvas, Math.round(x * dpr) / dpr, Math.round(y * dpr) / dpr, this.W * k, this.H * k);
+      if (typeof this.state === "number") {
+        // a soft vignette keeps the eye on the building you're in
+        const m = this.marks.get(IDS[this.state]);
+        if (!m) return;
+        const cxs = cam.ax + cam.s * this.bx(m.x + m.w / 2), cys = cam.ay + cam.s * this.by((m.top + this.gY) / 2);
+        const rad = cam.s * s * Math.max(m.w, this.gY - m.top);
+        const vg = o.createRadialGradient(cxs, cys, rad * 0.55, cxs, cys, rad * 1.8);
+        vg.addColorStop(0, "rgba(0,0,0,0)");
+        vg.addColorStop(1, this.pal.light ? "rgba(40,50,100,0.32)" : "rgba(3,3,14,0.55)");
+        o.fillStyle = vg;
+        o.fillRect(0, 0, vw, vh);
+      }
+    }
+
+    draw(now: number, still: boolean) {
+      const t = still ? 4.2 : now / 1000;
+      const dt = Math.min(0.1, this.lastT ? t - this.lastT : 0);
+      this.lastT = t;
+      const { W, H, pal: p } = this;
+      const g = this.g;
+      g.globalAlpha = 1;
+      g.clearRect(0, 0, W, H);
+      g.drawImage(this.sky, 0, 0);
+
+      if (!p.light) {
+        this.drawMoon();
+        this.drawStars(t, still);
+      }
+      this.drawClouds(t, still);
+      this.drawPlane(t, still);
+      this.drawCoin(t);
+      g.drawImage(this.back, 0, 0);
+      this.drawChartTag(t);
+      this.drawBlimp(t, still);
+      g.drawImage(this.front, 0, 0);
+      this.drawFlicker(now, still);
+      this.drawSigns(t, still);
+      this.drawBillboard(t, still);
+
+      this.drawExchange(t);
+      this.drawLibrary(t, still);
+      this.drawMint(t, now);
+      this.drawArena(t, now, still);
+      this.drawHome(t);
+      this.drawPending(t, still);
+      this.drawFlags(t);
+      this.drawPeek(t);
+
+      this.drawStreet(t, dt, still);
+      this.drawWalkers(t, dt, still);
+      this.drawRiver(t, still);
+      this.drawParticles(t, dt);
+      this.drawFireworks(t, dt);
+      this.drawSeason(t, dt, still);
+    }
+
+    drawStars(t: number, still: boolean) {
+      const p = this.pal;
+      for (const s of this.stars) {
+        const tw = still ? 0.8 : 0.55 + 0.45 * Math.sin(t * 1.7 + s.phase);
+        this.alpha(s.b * tw, () => {
+          this.P(s.x, s.y, p.star);
+          if (s.big) {
+            this.alpha(0.45, () => {
+              this.P(s.x - 1, s.y, p.star);
+              this.P(s.x + 1, s.y, p.star);
+              this.P(s.x, s.y - 1, p.star);
+              this.P(s.x, s.y + 1, p.star);
+            });
+          }
+        });
+      }
+      // occasional shooting star — a transaction streaking across
+      if (still) return;
+      if (!this.shootingStar && t > this.nextShooting) {
+        this.shootingStar = { x: Math.random() * this.W * 0.7, y: 6 + Math.random() * 40, born: t };
+        this.nextShooting = t + 7 + Math.random() * 9;
+      }
+      const ss = this.shootingStar;
+      if (ss) {
+        const age = t - ss.born;
+        if (age > 0.8) this.shootingStar = null;
+        else {
+          const hx = ss.x + age * 110;
+          const hy = ss.y + age * 38;
+          for (let i = 0; i < 12; i++)
+            this.alpha((1 - i / 12) * (1 - age / 0.8), () => this.P(hx - i * 1.4, hy - i * 0.48, i < 2 ? "#ffffff" : p.g2));
+        }
+      }
+    }
+
+    drawClouds(t: number, still: boolean) {
+      const p = this.pal;
+      for (const c of this.clouds) {
+        const x = ((c.x + (still ? 0 : t * c.speed)) % (this.W + c.w * 2)) - c.w;
+        this.alpha(p.light ? 0.9 : 0.55, () => {
+          if (p.light) {
+            this.R(x + 4, c.y - 3, c.w - 10, 2, p.cloud);
+            this.R(x + 2, c.y - 1, c.w - 4, 2, p.cloud);
+            this.R(x, c.y + 1, c.w, 2, p.cloud);
+            this.alpha(0.5, () => this.R(x + 2, c.y + 3, c.w - 4, 1, "#c9dcf5"));
+          } else {
+            this.R(x + 3, c.y, c.w - 6, 1, p.cloud);
+            this.R(x, c.y + 1, c.w, 2, p.cloud);
+          }
+        });
+      }
+    }
+
+    drawCoin(t: number) {
+      const p = this.pal;
+      const x = this.cx + 152;
+      const y = 24;
+      const r = 8;
+      this.glow(x, y, p.light ? 22 : 16, p.light ? "#fff6c9" : p.gold, p.light ? 0.12 : 0.07);
+      const ang = this.reduce ? 0.3 : t * 1.05;
+      const cos = Math.cos(ang);
+      const half = Math.max(0.5, Math.abs(cos) * r);
+      const edge = Math.abs(cos) < 0.35;
+      for (let dy = -r; dy <= r; dy++) {
+        const span = Math.sqrt(r * r - dy * dy) / r;
+        const w = Math.max(1, Math.round(half * span));
+        this.R(x - w, y + dy, w * 2 + 1, 1, p.goldSh);
+        if (w > 1) this.R(x - w + 1, y + dy, w * 2 - 1, 1, p.gold);
+      }
+      if (edge) {
+        this.R(x - 1, y - r + 1, 3, r * 2 - 1, p.goldSh);
+        this.R(x, y - r + 1, 1, r * 2 - 1, p.goldHl);
+      } else {
+        // emblem: an "S", mirrored on the back face
+        this.alpha(Math.min(1, (Math.abs(cos) - 0.35) * 2), () => {
+          const ox = x - 1;
+          const S = cos > 0 ? FONT["S"] : FONT["S"].map(([gx, gy]) => [2 - gx, gy] as [number, number]);
+          for (const [gx, gy] of S) {
+            const px = ox + (gx - 1) * Math.abs(cos) + 1;
+            this.P(px - 1, y - 2 + gy, p.goldSh);
+          }
+          this.P(x + Math.round(half * 0.5), y - r + 2, p.goldHl);
+          this.P(x + Math.round(half * 0.5) + (cos > 0 ? 1 : -1), y - r + 3, p.goldHl);
+        });
+      }
+    }
+
+    drawChartTag(t: number) {
+      const p = this.pal;
+      const x = this.W - 198;
+      const y = this.ridge[x];
+      const pulse = this.reduce ? 1 : 0.5 + 0.5 * Math.sin(t * 4);
+      this.glow(x, y, 4, p.ridge, 0.12 * pulse + 0.05);
+      this.R(x - 1, y - 1, 3, 3, p.ridge);
+      this.P(x, y, "#ffffff");
+      // last-price tag, like a chart's right axis
+      const label = this.btcPrice ? "BTC " + this.btcPrice : "BTC";
+      const tw = textWidth(label);
+      const bx = x + 4;
+      const by = y - 3;
+      this.R(bx, by, tw + 4, 7, p.ink);
+      this.R(bx, by, 1, 7, p.ridge);
+      this.T(label, bx + 2, by + 1, this.marketUp ? p.up : p.down);
+    }
+
+    drawFlicker(now: number, still: boolean) {
+      if (this.pal.light || still) return;
+      if (Math.random() < 0.06) {
+        const f = this.fillers[Math.floor(Math.random() * this.fillers.length)];
+        const lit = f?.wins.filter((w) => w.lit);
+        if (lit?.length) this.flicker.push({ win: lit[Math.floor(Math.random() * lit.length)], until: now + 1500 + Math.random() * 5000 });
+      }
+      this.flicker = this.flicker.filter((f) => f.until > now);
+      for (const { win } of this.flicker) this.R(win.x, win.y, win.w, win.h, this.pal.winOff);
+    }
+
+    drawSigns(t: number, still: boolean) {
+      const p = this.pal;
+      for (const s of this.signs) {
+        const len = s.word.length * 6 + 3;
+        const flick = !still && Math.sin(t * 13 + s.seed) > 0.985;
+        const on = !flick;
+        if (on && !p.light) this.glow(s.x + 3, s.y + len / 2, 7, s.color, 0.06);
+        this.R(s.x, s.y, 7, len, p.ink);
+        this.R(s.x, s.y, 7, 1, p.shade);
+        this.R(s.x, s.y + len - 1, 7, 1, p.shade);
+        this.R(s.x + 3, s.y - 2, 1, 2, p.shade);
+        [...s.word].forEach((ch, i) => this.T(ch, s.x + 2, s.y + 2 + i * 6, on ? s.color : mix(s.color, p.ink, 0.7)));
+      }
+    }
+
+    drawBillboard(t: number, still: boolean) {
+      const p = this.pal;
+      const { x, w, h } = this.billboard;
+      const top = this.gY - h - 14;
+      const text = "SMIT3Y.XYZ";
+      if (!p.light) this.glow(x + w / 2, top + 5, 14, p.g2, 0.05);
+      this.R(x + 1, top, w - 2, 10, p.ink);
+      this.R(x + 1, top, w - 2, 1, p.accent);
+      this.R(x + 1, top + 9, w - 2, 1, p.accent);
+      const tx = x + Math.floor((w - textWidth(text)) / 2);
+      const dead = !still && Math.sin(t * 9.1) > 0.93 ? 4 : -1;
+      [...text].forEach((ch, i) => {
+        const c = mix(p.g1, p.g3, i / (text.length - 1));
+        this.T(ch, tx + i * 4, top + 3, i === dead ? mix(c, p.ink, 0.75) : c);
+      });
+    }
+
+    // ── landmarks ────────────────────────────────────────────────────
+    drawExchange(t: number) {
+      const p = this.pal;
+      const m = this.marks.get("exchange")!;
+      const hov = this.hovered === "exchange";
+      const b = this.gY;
+      const x = m.x;
+      const shaftX = x + 3, shaftW = 30, shaftTop = b - 128;
+      const setX = x + 7, setW = 22, setTop = b - 144;
+
+      if (hov) this.glow(x + 18, b - 70, 30, p.accent, 0.02);
+      // shaft
+      this.R(shaftX, shaftTop, shaftW, b - shaftTop, p.body[3]);
+      this.R(shaftX, shaftTop, 1, b - shaftTop, p.shade);
+      this.R(shaftX + shaftW - 1, shaftTop, 1, b - shaftTop, hov ? p.accent : p.edge);
+      let i = 0;
+      for (let y = shaftTop + 10; y < b - 13; y += 3) {
+        for (let k = 0; k < 9; k++) {
+          const lit = hov || this.towerLit[i++ % this.towerLit.length];
+          const c = lit ? (k % 4 === 0 ? p.winWarm : p.winCool) : p.winOff;
+          this.R(shaftX + 2 + k * 3, y, 2, 2, c);
+        }
+      }
+      // glass reflection diagonal
+      this.alpha(p.light ? 0.25 : 0.08, () => {
+        for (let d = 0; d < 40; d++) this.P(shaftX + 4 + (d % 22), shaftTop + 20 + d * 2, "#ffffff");
+      });
+      // setback + crown
+      this.R(setX, setTop, setW, shaftTop - setTop, p.body[1]);
+      this.R(setX, setTop, 1, shaftTop - setTop, p.shade);
+      this.R(setX + setW - 1, setTop, 1, shaftTop - setTop, p.edge);
+      for (let y = setTop + 3; y < shaftTop - 2; y += 3)
+        for (let k = 0; k < 6; k++)
+          this.R(setX + 2 + k * 3, y, 2, 1, hov || (k + y) % 3 ? p.winCool : p.winOff);
+      this.R(x + 11, b - 151, 14, 7, p.body[2]);
+      for (let k = 0; k < 4; k++) this.R(x + 12 + k * 3, b - 150, 2, 5, p.shade);
+      this.R(x + 11, b - 151, 14, 1, p.edge);
+      // crown corner lights, chasing
+      const chase = Math.floor(t * 3) % 4;
+      [x + 11, x + 15, x + 20, x + 24].forEach((lx, k) => this.P(lx, b - 152, k === chase ? p.g2 : p.shade));
+      // antenna + beacon
+      this.R(x + 17, b - 166, 1, 15, p.stoneSh);
+      this.R(x + 16, b - 158, 3, 1, p.stoneSh);
+      const beaconOn = this.reduce || Math.floor(t * 1.2) % 2 === 0;
+      const beacon = this.marketUp ? p.up : p.down;
+      if (beaconOn) {
+        this.glow(x + 17, b - 167, 5, beacon, 0.15);
+        this.P(x + 17, b - 167, beacon);
+      }
+
+      // ticker band
+      const by = shaftTop + 2;
+      this.R(x + 2, by, 32, 7, p.ink);
+      this.R(x + 2, by - 1, 32, 1, p.accent);
+      this.R(x + 2, by + 7, 32, 1, p.accent);
+      const segs: TickerSeg[] = hov
+        ? [{ text: "COINBASE · DYER · MICHIGAN · S&Y   ·   ", color: p.g2 }]
+        : this.ticker;
+      const full = segs.map((s) => s.text).join("");
+      const tw = full.length * 4;
+      const off = this.reduce ? 0 : (t * 15) % tw;
+      const g = this.g;
+      g.save();
+      g.beginPath();
+      g.rect(x + 3, by, 30, 7);
+      g.clip();
+      for (let rep = 0; rep < 2; rep++) {
+        let cx = x + 3 - off + rep * tw;
+        for (const s of segs) {
+          if (cx < x + 34 && cx + s.text.length * 4 > x + 2) this.T(s.text, cx, by + 1, s.color);
+          cx += s.text.length * 4;
+        }
+      }
+      g.restore();
+
+      // lobby
+      this.R(x + 1, b - 12, 34, 1, p.accent);
+      this.R(x + 5, b - 11, 26, 11, p.interior);
+      this.alpha(hov ? 1 : p.light ? 0.35 : 0.45, () => this.R(x + 6, b - 10, 24, 10, p.winWarm));
+      for (let k = 0; k < 5; k++) this.R(x + 5 + k * 6, b - 11, 1, 11, p.shade);
+      this.R(x + 16, b - 7, 4, 7, p.ink);
+      if (hov) {
+        this.glow(x + 18, b - 2, 10, p.winWarm, 0.06);
+        this.R(x + 9, b - 4, 1, 4, p.ink);
+        this.P(x + 9, b - 5, p.ink);
+        this.R(x + 25, b - 4, 1, 4, p.ink);
+        this.P(x + 25, b - 5, p.ink);
+      }
+    }
+
+    drawLibrary(t: number, still: boolean) {
+      const p = this.pal;
+      const m = this.marks.get("library")!;
+      const hov = this.hovered === "library";
+      const b = this.gY;
+      const x = m.x;
+      const nowS = still ? this.anchorTs + 1 : Date.now() / 1000;
+      const el = nowS - this.anchorTs;
+      const t12 = ((el % SLOT) + SLOT) % SLOT;
+      const sinceMine = (performance.now() - this.mineAt) / 1000;
+      let state: "solid" | "falling" | "pending";
+      let phase = 0;
+      if (sinceMine < 3.2) {
+        state = sinceMine < 0.7 ? "falling" : "solid";
+        phase = sinceMine < 0.7 ? sinceMine / 0.7 : sinceMine - 0.7;
+      } else if (t12 < 2.5) {
+        state = "solid";
+        phase = t12;
+      } else if (t12 > SLOT - 0.7) {
+        state = "falling";
+        phase = (t12 - (SLOT - 0.7)) / 0.7;
+      } else state = "pending";
+      if (still) state = "solid";
+      if (state === "solid" && this.lastLibState === "falling") this.dust(x + 20, b - 8 - 8 * 12 + 1);
+      this.lastLibState = state;
+
+      // steps + portico
+      this.R(x, b - 2, 40, 2, p.stoneSh);
+      this.R(x + 2, b - 4, 36, 2, p.stone);
+      this.R(x + 2, b - 4, 36, 1, p.stoneHl);
+      this.R(x + 4, b - 8, 32, 4, p.stone);
+      for (let k = 0; k < 5; k++) this.R(x + 6 + k * 7, b - 8, 1, 4, p.stoneSh);
+      this.R(x + 18, b - 7, 4, 3, p.interior);
+      this.alpha(hov ? 0.9 : 0.5, () => this.R(x + 19, b - 6, 2, 2, p.winWarm));
+
+      const blockNum = this.blockNow(nowS);
+      let li = 0;
+      for (let i = 0; i < 8; i++) {
+        const top = i === 7;
+        const by = b - 8 - (i + 1) * 12 + 1;
+        const bx = x + 3 + (i % 2 ? 1 : -1);
+        if (top && state === "pending") {
+          // dashed outline of the block being mined, hash churning inside
+          const blink = Math.floor(t * 2) % 2 === 0;
+          for (let k = 0; k < 34; k += 2) {
+            this.P(bx + k, by, p.accent);
+            this.P(bx + k, by + 10, p.accent);
+          }
+          for (let k = 0; k < 11; k += 2) {
+            this.P(bx, by + k, p.accent);
+            this.P(bx + 33, by + k, p.accent);
+          }
+          if (blink || still) {
+            const hash = Math.floor(t * 8) * 2654435761;
+            const hx = "0X" + (hash >>> 0).toString(16).slice(0, 4).toUpperCase();
+            this.alpha(0.75, () => this.T(hx, bx + 17 - textWidth(hx) / 2, by + 3, p.g3));
+          }
+          continue;
+        }
+        let yy = by;
+        if (top && state === "falling") yy = by - 70 * (1 - phase * phase);
+        const tone = i % 2 ? p.body[0] : p.body[2];
+        this.R(bx, yy, 34, 11, tone);
+        this.R(bx, yy, 34, 1, p.edge);
+        this.R(bx + 33, yy, 1, 11, p.edge);
+        this.R(bx, yy + 10, 34, 1, p.shade);
+        this.R(bx, yy, 1, 11, p.shade);
+        for (let k = 0; k < 8; k++) {
+          const lit = hov || this.libLit[li++ % this.libLit.length];
+          this.R(bx + 3 + k * 4, yy + 3, 2, 4, lit ? p.winWarm : p.winOff);
+        }
+        if (top) {
+          const label = "#" + String(blockNum % 100000);
+          const flash = state === "solid" && phase < 1.2 && !still ? 1 - phase / 1.2 : 0;
+          this.R(bx + 2, yy + 2, 30, 7, p.ink);
+          this.T(label, bx + 17 - textWidth(label) / 2, yy + 3, p.g3);
+          if (flash > 0) this.alpha(flash * 0.6, () => this.R(bx, yy, 34, 11, "#ffffff"));
+        }
+        // chain links bridging to the block below
+        if (i > 0) {
+          for (const lx of [bx + 5, bx + 28]) {
+            this.P(lx, by + 10, p.accent);
+            this.P(lx - 1, by + 11, p.accent);
+            this.P(lx + 1, by + 11, p.accent);
+            this.P(lx, by + 12, p.accent);
+          }
+        }
+      }
+      if (hov) this.R(x + 1, b - 8 - 8 * 12, 1, 8 * 12, p.accent);
+    }
+
+    drawMint(t: number, now: number) {
+      const p = this.pal;
+      const m = this.marks.get("mint")!;
+      const hov = this.hovered === "mint";
+      const b = this.gY;
+      const x = m.x;
+      const mid = x + 31;
+
+      // steps
+      this.R(x, b - 2, 63, 2, p.stoneSh);
+      this.R(x + 2, b - 4, 59, 2, p.stone);
+      this.R(x + 2, b - 4, 59, 1, p.stoneHl);
+      this.R(x + 4, b - 6, 55, 2, p.stone);
+      this.R(x + 4, b - 6, 55, 1, p.stoneHl);
+      // interior with furnace glow
+      this.R(x + 5, b - 30, 53, 24, p.interior);
+      const fl = this.reduce ? 0.6 : 0.55 + 0.15 * Math.sin(t * 7) + 0.1 * Math.sin(t * 13);
+      this.alpha((hov ? 0.9 : 0.55) * fl, () => {
+        this.R(x + 6, b - 14, 51, 8, mix(p.winWarm, "#ff7a2f", 0.4));
+        this.R(x + 8, b - 18, 47, 4, mix(p.winWarm, "#ff7a2f", 0.2));
+      });
+      if (!p.light) this.glow(mid, b - 10, 16, "#ff9a3c", hov ? 0.06 : 0.035);
+      // coin press in the centre bay
+      const period = 1.4;
+      const ph = this.reduce ? 0.3 : (t % period) / period;
+      const ram = ph < 0.15 ? ph / 0.15 : ph < 0.3 ? 1 : ph < 0.7 ? 1 - (ph - 0.3) / 0.4 : 0;
+      this.R(mid - 4, b - 27, 1, 21, p.stoneSh);
+      this.R(mid + 4, b - 27, 1, 21, p.stoneSh);
+      this.R(mid - 4, b - 27, 9, 2, p.stoneSh);
+      this.R(mid - 1, b - 25, 3, 3 + Math.round(ram * 9), p.stone);
+      this.R(mid - 2, b - 22 + Math.round(ram * 9), 5, 2, p.stoneHl);
+      this.R(mid - 3, b - 9, 7, 2, p.stoneSh);
+      this.R(mid - 1, b - 10, 3, 1, p.gold);
+      if (ram === 1 && !this.reduce) {
+        this.P(mid - 3, b - 11, "#ffffff");
+        this.P(mid + 3, b - 11, "#ffffff");
+        if (now - this.lastPress > period * 1000 * 0.9) {
+          this.lastPress = now;
+          if (!hov) this.particles.push({ kind: "dust", x: mid, y: b - 11, vx: 0, vy: -8, born: t, life: 0.5, color: p.goldHl });
+        }
+      }
+      // columns
+      for (let k = 0; k < 6; k++) {
+        if (k === 2 || k === 3) {
+          // centre columns flank the press — keep them but slimmer feel
+        }
+        const cx = x + 5 + k * 10 + (k > 2 ? 1 : 0);
+        this.R(cx - 1, b - 30, 5, 1, p.stoneHl);
+        this.R(cx, b - 29, 3, 22, p.stone);
+        this.R(cx, b - 29, 1, 22, p.stoneHl);
+        this.R(cx + 2, b - 29, 1, 22, p.stoneSh);
+        this.R(cx - 1, b - 7, 5, 1, p.stoneSh);
+      }
+      // entablature with "MINT"
+      this.R(x + 2, b - 37, 59, 7, p.stone);
+      this.R(x + 2, b - 37, 59, 1, p.stoneHl);
+      this.R(x + 2, b - 31, 59, 1, p.stoneSh);
+      this.T("MINT", mid - 7, b - 36, hov ? p.gold : p.stoneSh);
+      for (let k = 0; k < 59; k += 3) this.P(x + 3 + k, b - 32, p.stoneSh);
+      // pediment
+      for (let r = 0; r < 12; r++) {
+        const half = Math.round(30 - r * 2.5);
+        if (half <= 0) break;
+        this.R(mid - half, b - 38 - r, half * 2 + 1, 1, r === 0 ? p.stoneSh : p.stone);
+        this.P(mid - half, b - 38 - r, p.stoneHl);
+        this.P(mid + half, b - 38 - r, p.stoneSh);
+      }
+      // coin emblem
+      this.disc(mid, b - 42, 3, p.goldSh);
+      this.disc(mid, b - 42, 2, hov ? p.goldHl : p.gold);
+      this.P(mid, b - 42, p.goldSh);
+      this.P(mid - 30, b - 39, p.stoneHl);
+      this.P(mid + 30, b - 39, p.stoneHl);
+      this.P(mid, b - 50, p.stoneHl);
+      if (hov) this.R(x + 2, b - 38, 59, 1, p.gold);
+
+      if (hov && !this.reduce) {
+        if (now - this.lastCoinSpawn > 110) {
+          this.lastCoinSpawn = now;
+          this.particles.push({
+            kind: "coin", x: mid + (Math.random() - 0.5) * 4, y: b - 12,
+            vx: (Math.random() - 0.5) * 70, vy: -55 - Math.random() * 30, born: t, life: 1.6,
+          });
+        }
+        if (now - this.lastStat > 1000) {
+          this.lastStat = now;
+          const stats = ["1570 SAT", "75%+", "37 SCHOOLS", "4.7 GPA"];
+          const text = stats[this.statIdx++ % stats.length];
+          const side = this.statIdx % 2 ? 1 : -1;
+          const sx = side > 0 ? x + 66 : x - 3 - textWidth(text);
+          this.particles.push({ kind: "text", text, x: sx, y: b - 34, vx: 0, vy: -10, born: t, life: 1.8, color: p.gold });
+        }
+      }
+    }
+
+    drawArena(t: number, now: number, still: boolean) {
+      const p = this.pal;
+      const m = this.marks.get("arena")!;
+      const hov = this.hovered === "arena";
+      const b = this.gY;
+      const x = m.x;
+      const mid = x + 39;
+
+      // floodlight masts
+      for (const mx of [x + 1, x + 76]) {
+        this.R(mx, b - 52, 1, 22, p.stoneSh);
+        this.R(mx - 2, b - 54, 5, 2, p.stoneSh);
+        const on = !p.light;
+        this.R(mx - 2, b - 54, 5, 1, on ? "#fff7d6" : p.stone);
+        if (on) {
+          this.glow(mx, b - 54, hov ? 9 : 6, "#fff7d6", hov ? 0.12 : 0.07);
+          // beam angled toward the roof
+          this.alpha(hov ? 0.12 : 0.06, () => {
+            for (let d = 1; d < 14; d++) {
+              const dir = mx < mid ? 1 : -1;
+              this.R(mx + dir * d - (dir < 0 ? d : 0), b - 53 + d, d, 1, "#fff7d6");
+            }
+          });
+        }
+      }
+      // dome roof
+      const domeH = 16;
+      for (let r = 0; r < domeH; r++) {
+        const half = Math.round(39 * Math.sqrt(1 - (r / domeH) ** 2));
+        this.R(mid - half, b - 31 - r, half * 2, 1, r % 4 === 0 ? p.body[1] : p.body[0]);
+        this.P(mid - half, b - 31 - r, p.shade);
+        this.P(mid + half - 1, b - 31 - r, p.edge);
+      }
+      for (let k = -3; k <= 3; k++) {
+        const rx = mid + k * 9;
+        const maxR = Math.round(domeH * Math.sqrt(Math.max(0, 1 - (Math.abs(k * 9) / 39) ** 2)));
+        this.alpha(0.5, () => this.R(rx, b - 31 - maxR + 1, 1, maxR, p.edge));
+      }
+      // maize & blue ring
+      this.R(x + 1, b - 31, 76, 1, p.maize);
+      this.R(x, b - 30, 78, 1, p.blue);
+      // façade
+      this.R(x, b - 29, 78, 29, p.body[2]);
+      this.R(x, b - 29, 1, 29, p.shade);
+      this.R(x + 77, b - 29, 1, 29, p.edge);
+      // scoreboard on the crown
+      this.R(mid - 1, b - 48, 1, 2, p.shade);
+      this.R(mid - 12, b - 55, 24, 8, p.ink);
+      this.R(mid - 12, b - 55, 24, 1, p.maize);
+      const home = String(this.score[0]);
+      const away = String(this.score[1]);
+      this.T(home, mid - 10, b - 53, p.maize);
+      this.P(mid, b - 51, "#e8e6f5");
+      this.T(away, mid + 3, b - 53, "#9fb4e8");
+
+      // the big arched window into the court
+      const wl = x + 12, wr = x + 66, wt = b - 26, wb = b - 6;
+      for (let y = wt; y < wb; y++) {
+        const fromTop = y - wt;
+        const inset = fromTop < 4 ? [6, 3, 1, 0][fromTop] : 0;
+        this.R(wl + inset, y, wr - wl - inset * 2, 1, p.interior);
+      }
+      // crowd
+      for (const [i, c] of this.crowd.entries()) {
+        const bounce = hov && !still && Math.sin(t * 14 + i * 1.7) > 0.4 ? -1 : 0;
+        this.P(c.x, c.y + bounce, c.c);
+      }
+      // arena lights cast a warm wash
+      this.alpha(hov ? 0.22 : 0.14, () => this.R(wl, wt + 6, wr - wl, 8, "#fff2c2"));
+      // court
+      this.R(wl, b - 11, wr - wl, 5, p.wood);
+      this.R(wl, b - 11, wr - wl, 1, mix(p.wood, "#ffffff", 0.3));
+      this.P(x + 39, b - 10, "#ffffff");
+      this.P(x + 39, b - 9, "#ffffff");
+      this.R(x + 50, b - 10, 1, 4, mix(p.wood, "#ffffff", 0.5));
+      this.R(x + 54, b - 10, 8, 4, mix(p.wood, p.blue, 0.35));
+      this.R(x + 26, b - 9, 4, 1, p.maize);
+      // hoop: pole, arm, backboard, rim, net
+      this.R(x + 64, b - 22, 1, 12, "#9b98b9");
+      this.R(x + 61, b - 22, 3, 1, "#9b98b9");
+      this.R(x + 60, b - 24, 1, 7, "#f2f2f8");
+      this.R(x + 56, b - 19, 4, 1, "#ff6a2a");
+      const swish = hov && this.lastShot >= 0 && ((now - this.hoverSince) / 1800) % 1 > 0.48 && ((now - this.hoverSince) / 1800) % 1 < 0.6;
+      this.alpha(0.85, () => {
+        this.P(x + 56 + (swish ? 1 : 0), b - 18, "#ffffff");
+        this.P(x + 59 - (swish ? 1 : 0), b - 18, "#ffffff");
+        this.P(x + 57, b - 17, "#ffffff");
+        this.P(x + 58, b - 16, "#ffffff");
+      });
+      // shooter
+      const shooting = hov && !still;
+      const cyc = shooting ? ((now - this.hoverSince) / 1800) % 1 : 0;
+      const sx = x + 22;
+      this.R(sx, b - 10, 1, 3, p.ink);
+      this.R(sx + 1, b - 10, 1, 3, p.ink);
+      this.R(sx, b - 13, 2, 3, p.blue);
+      this.R(sx, b - 15, 2, 2, "#8a5a3c");
+      if (cyc < 0.12 && shooting) {
+        this.P(sx + 2, b - 16, p.ink);
+        this.P(sx + 2, b - 17, p.ink);
+      } else this.P(sx + 2, b - 12, p.ink);
+      // the ball
+      if (shooting) {
+        const cycleIdx = Math.floor((now - this.hoverSince) / 1800);
+        let bx: number, by: number;
+        if (cyc < 0.5) {
+          const u = cyc / 0.5;
+          bx = sx + 2 + (x + 57 - (sx + 2)) * u;
+          by = b - 17 + (-(4 * u * (1 - u)) * 9) + (-2 * u);
+        } else if (cyc < 0.62) {
+          const u = (cyc - 0.5) / 0.12;
+          bx = x + 57;
+          by = b - 19 + u * 5;
+          if (this.lastShot !== cycleIdx) {
+            this.lastShot = cycleIdx;
+            this.score[0] += cycleIdx % 3 === 2 ? 3 : 2;
+          }
+        } else {
+          const u = (cyc - 0.62) / 0.38;
+          bx = x + 57 - u * 6;
+          by = b - 14 + Math.abs(Math.sin(u * Math.PI * 2)) * -4 * (1 - u) + u * 5;
+        }
+        this.R(bx, by, 2, 2, "#ff7a2f");
+        this.P(bx, by, "#ffb27a");
+      } else {
+        this.R(sx + 2, b - 12, 2, 2, "#ff7a2f");
+      }
+      // mullions over the glass
+      this.alpha(0.6, () => {
+        for (let mx = wl + 9; mx < wr; mx += 9) this.R(mx, wt + 1, 1, wb - wt - 1, p.shade);
+      });
+      // glass sheen
+      this.alpha(p.light ? 0.3 : 0.1, () => {
+        for (let d = 0; d < 10; d++) this.P(wl + 4 + d, wt + 2 + d, "#ffffff");
+      });
+      // entrance
+      this.R(x + 4, b - 6, 70, 6, p.body[3]);
+      for (let k = 0; k < 3; k++) {
+        const dx = x + 26 + k * 10;
+        this.R(dx, b - 5, 6, 5, p.interior);
+        this.alpha(0.6, () => this.R(dx + 1, b - 4, 4, 4, p.winWarm));
+      }
+      this.T("ARENA", x + 5, b - 5, hov ? p.maize : mix(p.stoneHl, p.body[3], 0.4));
+      if (hov) this.R(x, b - 30, 1, 30, p.accent);
+    }
+
+    drawHome(t: number) {
+      const p = this.pal;
+      const m = this.marks.get("home")!;
+      const hov = this.hovered === "home";
+      const b = this.gY;
+      const x = m.x;
+      const brick = p.light ? "#8a7aa6" : "#2f2449";
+      const brickHl = p.light ? "#a596c0" : "#45376a";
+      const brickSh = p.light ? "#6b5c88" : "#1e1733";
+      const roofY = b - 76;
+
+      this.R(x, roofY, 44, b - roofY, brick);
+      this.R(x, roofY, 1, b - roofY, brickSh);
+      this.R(x + 43, roofY, 1, b - roofY, brickHl);
+      // brick courses
+      this.alpha(0.25, () => {
+        for (let y = roofY + 2; y < b - 10; y += 2)
+          for (let bx = x + 1 + ((y / 2) % 2 ? 2 : 0); bx < x + 43; bx += 4) this.P(bx, y, brickSh);
+      });
+      // cornice + parapet
+      this.R(x - 1, roofY - 1, 46, 2, brickHl);
+      this.R(x - 1, roofY + 1, 46, 1, brickSh);
+
+      // floors
+      let wi = 0;
+      for (let f = 0; f < 6; f++) {
+        const fy = b - 10 - (f + 1) * 11;
+        if (f === 2) {
+          // your window
+          const wx = x + 17, wy = fy + 1, ww = 22, wh = 10;
+          this.R(wx - 1, wy - 1, ww + 2, wh + 2, brickSh);
+          this.R(wx, wy, ww, wh, p.light ? "#f6e3b4" : "#ffcf73");
+          if (!p.light) this.glow(wx + 11, wy + 5, 14, "#ffcf73", 0.05);
+          // lamp
+          this.R(wx + 2, wy + 1, 3, 1, "#3b2a18");
+          this.P(wx + 3, wy + 2, "#fff6d8");
+          // desk
+          this.R(wx, wy + 8, ww, 1, "#5a3a22");
+          // monitor (9×7) with candles or a "gm"
+          const mx = wx + 11, my = wy + 1;
+          this.R(mx, my, 9, 7, "#14121f");
+          this.R(mx + 1, my + 1, 7, 5, "#061008");
+          if (hov) {
+            this.T("GM", mx + 1, my + 1, p.up);
+          } else {
+            const hs = [2, 3, 2, 4, 3, 5, 4];
+            const shift = this.reduce ? 0 : Math.floor(t * 0.7) % 3;
+            for (let k = 0; k < 7; k++) {
+              const h = Math.min(5, hs[(k + shift) % hs.length]);
+              const up = (k + shift) % 3 !== 1;
+              this.R(mx + 1 + k, my + 6 - h, 1, h, up ? p.up : p.down);
+            }
+          }
+          this.R(mx + 4, my + 7, 1, 1, "#14121f");
+          // you, at the desk
+          const px = wx + 7;
+          this.R(px, wy + 3, 2, 2, "#1b1325");
+          this.R(px - 1, wy + 5, 4, 3, "#1b1325");
+          this.R(px - 2, wy + 4, 1, 5, "#3b2a40");
+          const wave = hov && !this.reduce ? Math.floor(t * 5) % 2 : -1;
+          if (wave === 0) {
+            this.P(px + 3, wy + 4, "#1b1325");
+            this.P(px + 4, wy + 3, "#1b1325");
+            this.P(px + 4, wy + 2, "#1b1325");
+          } else if (wave === 1) {
+            this.P(px + 3, wy + 4, "#1b1325");
+            this.P(px + 3, wy + 3, "#1b1325");
+            this.P(px + 3, wy + 2, "#1b1325");
+          } else this.R(px + 3, wy + 6, 3, 1, "#1b1325");
+          // plant on the sill
+          this.P(wx + 19, wy + 7, "#3ea05a");
+          this.P(wx + 20, wy + 6, "#3ea05a");
+          this.P(wx + 18, wy + 6, "#57c26f");
+          this.R(wx + 18, wy + 8, 3, 1, "#8a4b2a");
+          // left window on this floor
+          this.R(x + 4, fy + 2, 7, 7, this.homeLit[wi++] || hov ? p.winWarm : p.winOff);
+          this.R(x + 7, fy + 2, 1, 7, brickSh);
+          continue;
+        }
+        for (const wx of [x + 4, x + 18, x + 32]) {
+          const lit = hov || this.homeLit[wi++ % this.homeLit.length];
+          this.R(wx, fy + 2, 7, 7, lit ? p.winWarm : p.winOff);
+          this.R(wx + 3, fy + 2, 1, 7, brickSh);
+          this.R(wx, fy + 5, 7, 1, brickSh);
+          this.R(wx - 1, fy + 9, 9, 1, brickHl);
+        }
+        if (f % 2 === 1) {
+          // balcony rail
+          this.R(x + 2, fy + 8, 11, 1, p.stoneSh);
+          for (let k = 0; k < 11; k += 2) this.P(x + 2 + k, fy + 9, p.stoneSh);
+          this.R(x + 2, fy + 10, 11, 1, p.stoneSh);
+        }
+      }
+
+      // ground-floor café
+      this.R(x + 1, b - 10, 42, 10, p.interior);
+      this.alpha(p.light ? 0.5 : 0.9, () => this.R(x + 3, b - 8, 22, 6, p.winWarm));
+      this.R(x + 29, b - 8, 5, 8, "#3b2a18");
+      this.P(x + 32, b - 4, p.gold);
+      for (let k = 0; k < 42; k++) this.P(x + 1 + k, b - 11, k % 4 < 2 ? p.g1 : p.stoneHl);
+      for (let k = 0; k < 42; k += 2) this.P(x + 1 + k, b - 10, k % 4 < 2 ? p.g1 : p.stoneHl);
+      this.T("GM", x + 10, b - 7, p.ink);
+
+      // roof: water tower, dish, cat
+      const tx = x + 5;
+      this.R(tx, roofY - 4, 1, 3, p.shade);
+      this.R(tx + 7, roofY - 4, 1, 3, p.shade);
+      this.R(tx + 2, roofY - 4, 1, 3, p.shade);
+      this.R(tx - 1, roofY - 11, 10, 7, "#6b4a32");
+      for (let k = 0; k < 10; k += 2) this.R(tx - 1 + k, roofY - 11, 1, 7, "#5a3d29");
+      this.R(tx - 1, roofY - 8, 10, 1, "#3b2a18");
+      this.R(tx, roofY - 13, 8, 2, "#4a4458");
+      this.R(tx + 2, roofY - 15, 4, 2, "#4a4458");
+      this.R(x + 35, roofY - 6, 1, 5, p.shade);
+      this.R(x + 33, roofY - 8, 4, 1, p.stoneSh);
+      this.R(x + 32, roofY - 9, 1, 2, p.stoneSh);
+      this.P(x + 35, roofY - 9, p.accent);
+      const cat = p.light ? "#2b2335" : "#07060f";
+      const cxp = x + 24;
+      this.R(cxp, roofY - 4, 3, 3, cat);
+      this.R(cxp, roofY - 6, 3, 2, cat);
+      this.P(cxp, roofY - 7, cat);
+      this.P(cxp + 2, roofY - 7, cat);
+      if (!p.light) {
+        this.P(cxp, roofY - 5, p.up);
+        this.P(cxp + 2, roofY - 5, p.up);
+      }
+      const tail = this.reduce ? 0 : Math.floor(t * 1.4) % 2;
+      this.P(cxp + 3, roofY - 2, cat);
+      this.P(cxp + 4, roofY - 3 - tail, cat);
+      if (hov) this.R(x + 43, roofY, 1, b - roofY, p.accent);
+    }
+
+    // ── street, river, particles ─────────────────────────────────────
+    drawStreet(t: number, dt: number, still: boolean) {
+      const p = this.pal;
+      const { W, gY } = this;
+      this.R(0, gY, W, 2, p.sidewalk);
+      this.alpha(0.5, () => {
+        for (let x = 0; x < W; x += 6) this.P(x, gY + 1, p.shade);
+      });
+      this.R(0, gY + 2, W, 10, p.road);
+      for (let x = 0; x < W; x += 8) this.R(x + ((t * 0) | 0), gY + 7, 4, 1, p.lane);
+      this.R(0, gY + 12, W, 1, p.quayHl);
+      this.R(0, gY + 13, W, 1, p.quay);
+
+      // lamps
+      for (const lx of this.lamps) {
+        if (!p.light) {
+          this.glow(lx, gY - 11, 7, p.lamp, 0.07);
+          this.alpha(0.35, () => this.R(lx - 3, gY, 7, 1, p.lamp));
+        }
+        this.R(lx, gY - 11, 1, 11, p.light ? "#4a4a68" : "#0b0a1c");
+        this.R(lx - 1, gY - 1, 3, 1, p.light ? "#4a4a68" : "#0b0a1c");
+        this.R(lx - 1, gY - 12, 3, 1, p.light ? "#4a4a68" : "#0b0a1c");
+        this.P(lx, gY - 11, p.light ? "#f2f0e6" : p.lamp);
+      }
+
+      // wallet cars
+      for (const c of this.cars) {
+        if (!still) c.x += c.speed * dt;
+        if (c.x > W + 12) c.x = -12;
+        if (c.x < -12) c.x = W + 12;
+        const dir = c.speed > 0 ? 1 : -1;
+        const y = c.lane ? gY + 8 : gY + 3;
+        const x = Math.round(c.x);
+        this.R(x, y + 1, 10, 2, c.color);
+        this.R(x + 2, y, 6, 1, c.color);
+        this.R(x + (dir > 0 ? 5 : 3), y, 2, 1, p.light ? "#d8e6ff" : "#9fc4ff");
+        this.P(x + 2, y + 3, "#000000");
+        this.P(x + 7, y + 3, "#000000");
+        this.P(dir > 0 ? x + 9 : x, y + 1, "#fff3b0");
+        this.P(dir > 0 ? x : x + 9, y + 1, "#ff4a4a");
+        if (!p.light) {
+          this.alpha(0.18, () => this.R(dir > 0 ? x + 10 : x - 5, y + 1, 5, 2, "#fff3b0"));
+        }
+        if (c.coin) {
+          this.R(x + 4, y - 1, 2, 1, p.gold);
+          this.P(x + 4, y - 1, p.goldHl);
+        }
+      }
+    }
+
+    drawRiver(t: number, still: boolean) {
+      const p = this.pal;
+      const { W, H, gY } = this;
+      const top = gY + 14;
+      this.R(0, top, W, H - top, p.water);
+
+      // reflections: lamps, the coin, the billboard
+      const reflect = (x: number, color: string, a: number, spread = 1) => {
+        for (let y = top + 1; y < H; y += 2) {
+          const wob = still ? 0 : Math.round(Math.sin(t * 2.2 + y * 0.9 + x) * spread);
+          const fade = 1 - (y - top) / (H - top);
+          this.alpha(a * fade, () => this.R(x - 1 + wob, y, 3, 1, color));
+        }
+      };
+      if (!p.light) {
+        for (const lx of this.lamps) reflect(lx, p.lamp, 0.45);
+        reflect(this.cx + 152, p.gold, 0.5, 2);
+        reflect(this.billboard.x + 22, p.g2, 0.4, 2);
+        const ex = this.marks.get("exchange")!;
+        reflect(ex.x + 18, p.winCool, 0.25, 3);
+      } else {
+        this.alpha(0.25, () => {
+          for (let y = top + 2; y < H; y += 3) this.R(0, y, W, 1, "#7fb0e8");
+        });
+      }
+
+      // flowing bits
+      for (const row of this.bits) {
+        if (row.y >= H - 1) continue;
+        const off = still ? 0 : (t * row.speed) % (W + 20);
+        for (const it of row.items) {
+          const x = ((it.x + off) % (W + 20)) - 10;
+          this.alpha(it.a, () => {
+            if (it.one) this.R(x, row.y, 1, 3, p.g3);
+            else {
+              this.R(x, row.y, 2, 1, p.g3);
+              this.R(x, row.y + 2, 2, 1, p.g3);
+              this.P(x - 1, row.y + 1, p.g3);
+              this.P(x + 2, row.y + 1, p.g3);
+            }
+          });
+        }
+      }
+
+      // a barge hauling blocks downstream
+      const loop = W + 90;
+      const bx = Math.round(((still ? 0.3 : t * 7) % loop) - 40);
+      const by = top + 2;
+      this.R(bx, by + 3, 22, 3, p.light ? "#3b3f5e" : "#1c1a38");
+      this.R(bx + 1, by + 6, 20, 1, p.light ? "#2a2d47" : "#110f26");
+      this.R(bx, by + 3, 22, 1, p.quayHl);
+      for (const [k, c] of [[2, p.g1], [7, p.g2], [12, p.g3]] as Array<[number, string]>) {
+        this.R(bx + k, by - 1, 4, 4, p.ink);
+        this.R(bx + k, by - 1, 4, 1, c);
+        this.R(bx + k, by - 1, 1, 4, c);
+      }
+      this.R(bx + 17, by, 4, 3, p.stoneSh);
+      this.P(bx + 18, by + 1, p.winWarm);
+      this.P(bx + 21, by - 2, p.down);
+      if (!p.light) this.glow(bx + 21, by - 2, 3, p.down, 0.12);
+    }
+
+    dust(x: number, y: number) {
+      const t = this.lastT;
+      for (let i = 0; i < 10; i++) {
+        this.particles.push({
+          kind: "dust", x: x + (Math.random() - 0.5) * 34, y,
+          vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 14, born: t, life: 0.6, color: this.pal.stoneHl,
+        });
+      }
+    }
+
+    drawParticles(t: number, dt: number) {
+      const p = this.pal;
+      this.particles = this.particles.filter((q) => t - q.born < q.life);
+      for (const q of this.particles) {
+        const age = (t - q.born) / q.life;
+        q.x += q.vx * dt;
+        q.y += q.vy * dt;
+        if (q.kind === "coin") {
+          q.vy += 140 * dt;
+          const spin = Math.floor((t - q.born) * 10) % 3;
+          const w = [3, 2, 1][spin];
+          this.R(q.x - Math.floor(w / 2), q.y, w, 3, p.gold);
+          if (w > 1) this.P(q.x, q.y, p.goldHl);
+        } else if (q.kind === "dust") {
+          q.vy += 30 * dt;
+          this.alpha(1 - age, () => this.P(q.x, q.y, q.color ?? "#ffffff"));
+        } else if (q.kind === "text" && q.text) {
+          const a = age < 0.15 ? age / 0.15 : 1 - (age - 0.15) / 0.85;
+          this.alpha(Math.max(0, a), () => {
+            this.R(q.x - 2, q.y - 2, textWidth(q.text!) + 4, 9, p.ink);
+            this.T(q.text!, q.x, q.y, q.color ?? p.gold);
+          });
+        }
+      }
+    }
+
+    // ── new life in the city ─────────────────────────────────────────
+    drawMoon() {
+      const p = this.pal;
+      const x = Math.max(12, this.cx - 205), y = 20, r = 6;
+      const ph = moonPhase();
+      this.glow(x, y, 13, "#fff4d6", 0.05);
+      this.disc(x, y, r, "#fff4d6");
+      this.P(x - 2, y - 2, "#d9cfb0");
+      this.P(x + 2, y + 1, "#d9cfb0");
+      this.P(x - 1, y + 3, "#d9cfb0");
+      // today's real phase: a dark disc slid across the lit one
+      const off = Math.round(ph < 0.5 ? -4 * r * ph : 4 * r * (1 - ph));
+      const dark = hex(p.sky[0]);
+      for (let dy = -r; dy <= r; dy++) {
+        const span = Math.floor(Math.sqrt(r * r - dy * dy));
+        for (let dx = -span; dx <= span; dx++) {
+          const sx = dx - off;
+          if (sx * sx + dy * dy <= r * r + 1) this.P(x + dx, y + dy, dark);
+        }
+      }
+    }
+
+    drawPlane(t: number, still: boolean) {
+      if (still) return;
+      const loop = 26;
+      const u = ((t + this.nextPlane) % loop) / loop;
+      if (u > 0.55) return;
+      const x = Math.round(this.W + 10 - (u / 0.55) * (this.W + 20));
+      const y = 9;
+      const c = this.pal.light ? "#ffffff" : "#8f8bb6";
+      this.R(x, y, 5, 1, c);
+      this.P(x + 2, y - 1, c);
+      this.P(x + 3, y + 1, c);
+      if (Math.floor(t * 3) % 2 === 0) {
+        this.P(x - 1, y, this.pal.down);
+        this.P(x + 5, y, this.pal.up);
+      }
+    }
+
+    drawBlimp(t: number, still: boolean) {
+      const p = this.pal;
+      const loop = this.W + 80;
+      const x = Math.round(((still ? 0.3 : t * 4) % loop) - 40);
+      const y = 40 + Math.round(Math.sin(t * 0.6) * 1.5);
+      const body = p.light ? "#e6e1f7" : "#2b285a";
+      const hl = p.light ? "#ffffff" : "#3f3b7a";
+      // envelope
+      for (let r = -5; r <= 5; r++) {
+        const half = Math.round(15 * Math.sqrt(1 - (r / 6) ** 2));
+        this.R(x - half, y + r, half * 2, 1, r < -2 ? hl : body);
+      }
+      // fins + gondola
+      this.R(x + 13, y - 6, 3, 3, body);
+      this.R(x + 13, y + 4, 3, 3, body);
+      this.R(x - 4, y + 6, 8, 2, p.light ? "#b8b2d6" : "#1a1840");
+      this.P(x - 2, y + 7, p.winWarm);
+      this.P(x + 1, y + 7, p.winWarm);
+      // scrolling banner on the side
+      const msgs = ["GM", "WAGMI", "#" + String(this.blockNow() % 100000), this.btcPrice ? "BTC " + this.btcPrice : "HODL", "SMIT3Y.XYZ"];
+      const msg = msgs[Math.floor(t / 3.2) % msgs.length];
+      this.R(x - 11, y - 3, 22, 7, p.ink);
+      const g = this.g;
+      g.save();
+      g.beginPath();
+      g.rect(x - 10, y - 3, 20, 7);
+      g.clip();
+      const tw = textWidth(msg);
+      const off = tw > 18 ? Math.round(((t * 12) % (tw + 22)) - 2) : Math.round((tw - 18) / 2);
+      this.T(msg, x - 9 - off + (tw > 18 ? 18 : 0), y - 2, p.maize);
+      g.restore();
+      if (Math.floor(t * 2) % 2 === 0) this.P(x - 15, y, p.down);
+    }
+
+    drawPending(t: number, still: boolean) {
+      const p = this.pal;
+      const m = this.marks.get("pending")!;
+      const hov = this.hovered === "pending";
+      const b = this.gY;
+      const x = m.x;
+      const steel = "#c98a2b";
+      // dirt lot
+      this.R(x - 2, b - 2, 48, 2, p.light ? "#8b6a4a" : "#3a2a22");
+      // finished floors at the bottom
+      this.R(x + 3, b - 30, 30, 28, p.body[1]);
+      this.R(x + 3, b - 30, 30, 1, p.edge);
+      for (let y = b - 27; y < b - 6; y += 4)
+        for (let k = 0; k < 6; k++) this.R(x + 5 + k * 5, y, 3, 2, (k + y) % 3 === 0 || hov ? p.winWarm : p.winOff);
+      // scaffold frame going up
+      for (const cx of [x + 3, x + 17, x + 32]) this.R(cx, b - 74, 1, 44, steel);
+      for (let y = b - 74; y < b - 30; y += 11) {
+        this.R(x + 3, y, 30, 1, steel);
+        for (let d = 0; d < 14; d += 2) this.P(x + 3 + d, y + Math.round(d * 0.78), mix(steel, p.ink, 0.35));
+      }
+      // workers in hard hats
+      const bob = still ? 0 : Math.floor(t * 2) % 2;
+      for (const [wx, wy] of [[x + 9, b - 34], [x + 25, b - 45]] as Array<[number, number]>) {
+        this.R(wx, wy - 3, 2, 3, "#ff8a3d");
+        this.R(wx, wy - 5 - bob, 2, 1, "#ffcb05");
+        this.P(wx, wy - 4 - bob, "#d8a77a");
+      }
+      // welding sparks
+      if (!still && (hov || Math.sin(t * 1.7) > 0.6)) {
+        const sx = x + 27, sy = b - 46;
+        this.glow(sx, sy, 4, "#bfe7ff", 0.25);
+        for (let i = 0; i < 4; i++) this.P(sx + Math.round(Math.sin(t * 40 + i) * 2), sy + Math.round(Math.abs(Math.cos(t * 33 + i)) * 3), i % 2 ? "#fff2a8" : "#ffffff");
+      }
+      // tower crane: lattice mast, jib, counterweight, cab
+      const mx = x + 40;
+      for (let y = b - 2; y > b - 110; y -= 3) {
+        this.P(mx, y, p.maize);
+        this.P(mx + 2, y, p.maize);
+        this.P(mx + 1, y - 1, mix(p.maize, p.ink, 0.3));
+      }
+      const jy = b - 111;
+      this.R(mx - 46, jy, 60, 1, p.maize);
+      for (let k = -46; k < 14; k += 3) this.P(mx + k, jy - 1, mix(p.maize, p.ink, 0.25));
+      this.R(mx + 8, jy + 1, 6, 4, "#5a5a6a");
+      this.R(mx - 1, jy - 6, 1, 5, p.maize);
+      this.R(mx - 1, jy + 1, 4, 3, p.ink);
+      this.P(mx, jy + 2, p.winCool);
+      if (Math.floor(t * 1.5) % 2 === 0 || still) {
+        this.P(mx - 1, jy - 7, p.down);
+        if (!p.light) this.glow(mx - 1, jy - 7, 3, p.down, 0.15);
+      }
+      // one block hoisted per ETH slot, set down on the frame
+      const slot = (((Date.now() / 1000 - this.anchorTs) % SLOT) + SLOT) % SLOT;
+      const u = still ? 0.7 : slot / SLOT;
+      const reach = u < 0.45 ? u / 0.45 : 1;
+      const hx = Math.round(mx - 42 + reach * 24);
+      const lower = u < 0.45 ? 1 - u / 0.45 : u < 0.85 ? (u - 0.45) / 0.4 : 1;
+      const drop = Math.round(6 + lower * 22);
+      this.R(hx, jy + 1, 1, drop, "#9b98b9");
+      const by = jy + 1 + drop;
+      const set = u >= 0.85;
+      for (let k = 0; k < 11; k += 2) {
+        this.P(hx - 5 + k, by, p.accent);
+        this.P(hx - 5 + k, by + 7, p.accent);
+      }
+      for (let k = 0; k < 8; k += 2) {
+        this.P(hx - 5, by + k, p.accent);
+        this.P(hx + 5, by + k, p.accent);
+      }
+      if (set || hov) this.T("6", hx - 1, by + 2, p.g2);
+      // site fence + sign
+      for (let fx = x - 2; fx < x + 46; fx += 2) this.R(fx, b - 9, 1, 7, p.light ? "#9aa0b8" : "#3d3a66");
+      this.R(x - 2, b - 9, 48, 1, p.stoneSh);
+      const sign = hov ? (Math.floor(t * 1.2) % 2 ? "GM" : "SOON") : "NEXT";
+      this.R(x + 10, b - 13, 24, 9, "#f6c445");
+      this.R(x + 11, b - 12, 22, 7, "#1b1f36");
+      this.T(sign, x + 22 - textWidth(sign) / 2, b - 11, "#f6c445");
+      // cones
+      for (const cxp of [x - 1, x + 44]) {
+        this.R(cxp, b - 4, 3, 2, "#ff8a3d");
+        this.P(cxp + 1, b - 5, "#ff8a3d");
+        this.R(cxp, b - 3, 3, 1, "#ffffff");
+      }
+      if (hov && !p.light) {
+        // floodlights snap on
+        this.glow(x + 18, b - 60, 22, "#fff7d6", 0.06);
+      }
+      if (hov) this.R(x - 2, b - 74, 1, 74, p.accent);
+    }
+
+    // a little pennant on every building you've explored
+    drawFlags(t: number) {
+      const p = this.pal;
+      IDS.forEach((id, i) => {
+        if (!this.visited.has(this.blocks[i]?.id)) return;
+        const m = this.marks.get(id);
+        if (!m) return;
+        const fx = m.x + 2, fy = m.top - (id === "exchange" ? 0 : 6);
+        this.R(fx, fy, 1, 6, p.stoneSh);
+        const wave = this.reduce ? 0 : Math.floor(t * 3 + i) % 2;
+        this.R(fx + 1, fy, 3, 2, p.accent);
+        this.P(fx + 4, fy + wave, p.accent);
+      });
+    }
+
+    // on block pages: brackets around the building under the pointer
+    drawPeek(t: number) {
+      if (this.peek < 0) return;
+      const m = this.marks.get(IDS[this.peek]);
+      if (!m) return;
+      const c = this.pal.accent;
+      const x0 = m.x - 3, x1 = m.x + m.w + 2, y0 = m.hitTop - 4, y1 = this.gY + 1;
+      const L = 5;
+      const pulse = this.reduce ? 1 : 0.6 + 0.4 * Math.sin(t * 6);
+      this.alpha(pulse, () => {
+        this.R(x0, y0, L, 1, c); this.R(x0, y0, 1, L, c);
+        this.R(x1 - L + 1, y0, L, 1, c); this.R(x1, y0, 1, L, c);
+        this.R(x0, y1, L, 1, c); this.R(x0, y1 - L + 1, 1, L, c);
+        this.R(x1 - L + 1, y1, L, 1, c); this.R(x1, y1 - L + 1, 1, L, c);
+      });
+    }
+
+    drawWalkers(t: number, dt: number, still: boolean) {
+      const p = this.pal;
+      const y = this.gY + 1;
+      for (const w of this.walkers) {
+        if (!still) w.x += w.dir * w.speed * dt;
+        if (w.x > this.W + 8) w.x = -8;
+        if (w.x < -8) w.x = this.W + 8;
+        const x = Math.round(w.x);
+        const step = still ? 0 : Math.floor(t * w.speed * 0.5 + w.ph) % 2;
+        this.P(x, y - 6, w.hair);
+        this.P(x, y - 5, "#d8a77a");
+        this.R(x, y - 4, 2, 2, w.c);
+        this.P(x + (step ? 0 : 1), y - 2, p.ink);
+        this.P(x + (step ? 1 : 0), y - 1, p.ink);
+        if (w.dog) {
+          const dx = x + w.dir * 4;
+          this.R(dx, y - 2, 3, 1, "#c98a4a");
+          this.P(dx + (w.dir > 0 ? 2 : 0), y - 3, "#c98a4a");
+          this.P(dx, y - 1, "#c98a4a");
+          this.P(dx + 2, y - 1, "#c98a4a");
+        }
+      }
+    }
+
+    drawSeason(t: number, dt: number, still: boolean) {
+      const p = this.pal;
+      if (this.season === "halloween") {
+        // bats around the moon, pumpkins at the café door
+        const mxp = Math.max(12, this.cx - 205);
+        for (let i = 0; i < 3; i++) {
+          const a = (still ? 1 : t * (0.8 + i * 0.2)) + i * 2.1;
+          const bx = Math.round(mxp + Math.cos(a) * (14 + i * 6)), by = Math.round(22 + Math.sin(a * 1.3) * (6 + i * 2));
+          const up = still ? 0 : Math.floor(t * 8 + i) % 2;
+          const c = p.light ? "#2a2348" : "#0b0918";
+          this.P(bx, by, c);
+          this.P(bx - 1, by - up, c);
+          this.P(bx + 1, by - up, c);
+          this.P(bx - 2, by - 1 + up, c);
+          this.P(bx + 2, by - 1 + up, c);
+        }
+        const home = this.marks.get("home")!;
+        for (const px of [home.x + 26, home.x + 36]) {
+          this.R(px, this.gY - 3, 3, 3, "#ff7a1a");
+          this.P(px + 1, this.gY - 4, "#3e7d2a");
+          if (!p.light) this.P(px + 1, this.gY - 2, "#ffe066");
+        }
+      } else if (this.season === "winter") {
+        if (!this.flakes.length) {
+          const r = rng(77);
+          for (let i = 0; i < 70; i++) this.flakes.push({ x: r() * this.W, y: r() * this.H, v: 6 + r() * 10 });
+        }
+        for (const f of this.flakes) {
+          if (!still) {
+            f.y += f.v * dt;
+            f.x += Math.sin(t + f.v) * 0.1;
+          }
+          if (f.y > this.H) { f.y = -2; f.x = Math.random() * this.W; }
+          this.alpha(0.85, () => this.P(f.x, f.y, "#ffffff"));
+        }
+      }
+    }
+
+    fw: Array<{ kind: "rocket" | "spark"; x: number; y: number; vx: number; vy: number; born: number; life: number; c: string; ty: number }> = [];
+
+    firework(x?: number, y?: number) {
+      const p = this.pal;
+      const t = this.lastT;
+      const tx = Math.round(x ?? this.W * (0.15 + Math.random() * 0.7));
+      const ty = y ?? 18 + Math.random() * (this.gY * 0.35);
+      const c = [p.g1, p.g2, p.g3, p.accent, p.gold, "#ff5aa8"][Math.floor(Math.random() * 6)];
+      this.fw.push({ kind: "rocket", x: tx, y: this.gY, vx: 0, vy: -(this.gY - ty) / 0.8, born: t, life: 0.8, c, ty });
+    }
+
+    drawFireworks(t: number, dt: number) {
+      if (!this.fw.length) return;
+      const keep: typeof this.fw = [];
+      for (const f of this.fw) {
+        const age = t - f.born;
+        if (age > f.life) {
+          if (f.kind === "rocket") {
+            for (let i = 0; i < 28; i++) {
+              const a = (i / 28) * Math.PI * 2;
+              const sp = 26 + Math.random() * 22;
+              keep.push({ kind: "spark", x: f.x, y: f.ty, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, born: t, life: 1.1 + Math.random() * 0.5, c: Math.random() < 0.2 ? "#ffffff" : f.c, ty: 0 });
+            }
+            this.glow(f.x, f.ty, 9, f.c, 0.2);
+          }
+          continue;
+        }
+        keep.push(f);
+        if (f.kind === "rocket") {
+          f.y += f.vy * dt;
+          this.P(f.x, f.y, "#ffffff");
+          this.alpha(0.5, () => this.R(f.x, f.y + 1, 1, 3, f.c));
+        } else {
+          f.vy += 22 * dt;
+          f.vx *= 0.98;
+          f.x += f.vx * dt;
+          f.y += f.vy * dt;
+          const a = 1 - age / f.life;
+          const blink = age > f.life * 0.6 && Math.floor(t * 20 + f.vx) % 2 === 0;
+          if (!blink) this.alpha(a, () => this.P(f.x, f.y, f.c));
+        }
+      }
+      this.fw = keep;
+    }
+
+    // ── data shown on the hub ────────────────────────────────────────
+    tickClock() {
+      const set = (k: string, v: string) => document.querySelectorAll(`[data-city-stat="${k}"]`).forEach((n) => (n.textContent = v));
+      set("clock", new Intl.DateTimeFormat("en-US", { timeZone: "America/Detroit", hour: "numeric", minute: "2-digit" }).format(new Date()));
+      set("block", "#" + this.blockNow().toLocaleString("en-US"));
+      set("btc", this.btcPrice ? "$" + this.btcPrice : "—");
+      set("explored", `${this.blocks.filter((b) => this.visited.has(b.id)).length}/${this.blocks.length}`);
+    }
+
+    readVisited() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(VISITED_KEY) || "[]");
+        this.visited = new Set(Array.isArray(raw) ? raw : []);
+      } catch {
+        this.visited = new Set();
+      }
+    }
+
+    // ── interaction ──────────────────────────────────────────────────
+    pageState(): "hub" | number {
+      const v = document.querySelector<HTMLElement>("[data-world]")?.dataset.world ?? "hub";
+      if (v.startsWith("focus:")) {
+        const i = Number(v.slice(6));
+        if (this.blocks[i]) return i;
+      }
+      return "hub";
+    }
+
+    setPage() {
+      this.pageAbort.abort();
+      this.pageAbort = new AbortController();
+      const chrome = document.querySelector<HTMLElement>(".site-chrome");
+      const ch = chrome ? chrome.offsetHeight : 0;
+      document.documentElement.style.setProperty("--chrome-h", `${ch}px`);
+      if (Math.abs(ch - this.chromeH) > 2) this.layout();
+      const next = this.pageState();
+      this.readVisited();
+      this.tickClock();
+      if (next !== this.state) this.camAnim = { from: { ...this.cam }, start: performance.now(), dur: next === "hub" ? 1000 : 1150 };
+      this.state = next;
+      this.setPeek(-1, 0, 0);
+      document.body.classList.remove("world-pointer");
+      this.hubEl = next === "hub" ? document.querySelector<HTMLElement>("[data-city-hub]") : null;
+      this.tags = this.hubEl ? [...this.hubEl.querySelectorAll<HTMLAnchorElement>("[data-city-tag]")] : [];
+      this.copyEl = this.hubEl?.querySelector<HTMLElement>("[data-city-copy]") ?? null;
+      this.hintEl = this.hubEl?.querySelector<HTMLElement>("[data-city-hint]") ?? null;
+      this.tagSig = "";
+      const signal = this.pageAbort.signal;
+      this.tags.forEach((a, i) => {
+        a.addEventListener("pointerenter", () => this.setHoverIdx(i), { signal });
+        a.addEventListener("pointerleave", () => this.setHoverIdx(-1), { signal });
+        a.addEventListener("focus", () => this.setHoverIdx(i), { signal });
+        a.addEventListener("blur", () => this.setHoverIdx(-1), { signal });
+      });
+      // inside a block, its building plays its "hover" animation
+      this.hoverIdx = -1;
+      this.setHovered(typeof next === "number" ? IDS[next] : null);
+      let celebrated = true;
+      try { celebrated = !!sessionStorage.getItem("pw-celebrated"); } catch { /* ignore */ }
+      if (next === "hub" && this.visited.size >= this.blocks.length && !celebrated) {
+        try { sessionStorage.setItem("pw-celebrated", "1"); } catch { /* ignore */ }
+        for (let i = 0; i < 6; i++) setTimeout(() => this.firework(), 400 + i * 350);
+      }
+    }
+
+    setHoverIdx(i: number) {
+      if (i === this.hoverIdx) return;
+      this.hoverIdx = i;
+      this.tags.forEach((a, k) => a.classList.toggle("is-on", k === i));
+      document.body.classList.toggle("world-pointer", i >= 0);
+      if (i >= 0) prefetch(this.blocks[i].href);
+      this.setHovered(i >= 0 ? IDS[i] : null);
+    }
+
+    setHovered(id: string | null) {
+      if (id === this.hovered) return;
+      this.hovered = id;
+      this.hoverSince = performance.now();
+      this.lastShot = -1;
+      if (id === "library" && this.lastLibState === "pending") this.mineAt = performance.now();
+      if (this.reduce) this.draw(performance.now(), true);
+    }
+
+    // screen point → building index (or -1)
+    hit(clientX: number, clientY: number) {
+      const { s, ax, ay } = this.cam;
+      const X = (clientX - ax) / s, Y = (clientY - ay) / s;
+      const x = (X - this.stageX + this.pan) / this.s;
+      const y = (Y - this.stageY) / this.s;
+      for (let i = 0; i < IDS.length; i++) {
+        const m = this.marks.get(IDS[i]);
+        if (!m) continue;
+        const pad = m.id === "pending" ? 10 : 0;
+        if (x >= m.x - 1 && x <= m.x + m.w + 1 + pad && y >= m.hitTop && y <= this.gY + 2) return i;
+      }
+      return -1;
+    }
+
+    toArt(clientX: number, clientY: number) {
+      const { s, ax, ay } = this.cam;
+      return [((clientX - ax) / s - this.stageX + this.pan) / this.s, ((clientY - ay) / s - this.stageY) / this.s];
+    }
+
+    peekHit(e: MouseEvent | PointerEvent) {
+      const head = document.querySelector<HTMLElement>(".bp-head");
+      if (!head || e.clientY > head.getBoundingClientRect().bottom) return -1;
+      if (e.target instanceof Element && e.target.closest("a, button, .bp-bar, .bp-meta")) return -1;
+      return this.hit(e.clientX, e.clientY);
+    }
+
+    setPeek(i: number, x: number, y: number) {
+      this.peek = typeof this.state === "number" && i !== this.state ? i : -1;
+      const here = typeof this.state === "number" && i === this.state;
+      document.body.classList.toggle("world-pointer", i >= 0);
+      if (i < 0) {
+        if (this.peekEl) this.peekEl.hidden = true;
+        return;
+      }
+      if (!this.peekEl || !this.peekEl.isConnected) {
+        this.peekEl = document.createElement("div");
+        this.peekEl.className = "world-peek";
+        document.body.appendChild(this.peekEl);
+      }
+      const b = this.blocks[i];
+      this.peekEl.textContent = here ? `#${i} · you're here · scroll ↓` : `#${i} ${b.label} →`;
+      this.peekEl.classList.toggle("is-here", here);
+      this.peekEl.hidden = false;
+      this.peekEl.style.left = x + 16 + "px";
+      this.peekEl.style.top = y + 18 + "px";
+      if (!here) prefetch(b.href);
+    }
+
+    // hub labels + hero ride on the art
+    placeTags() {
+      if (!this.hubEl) return;
+      const hr = this.hubEl.getBoundingClientRect();
+      const { s, ax, ay } = this.cam;
+      const sig = [Math.round(ax), Math.round(ay), s.toFixed(3), Math.round(this.pan), Math.round(hr.top)].join(":");
+      if (sig === this.tagSig) return;
+      this.tagSig = sig;
+      this.tags.forEach((a, i) => {
+        const m = this.marks.get(IDS[i]);
+        if (!m) return;
+        const top = m.id === "pending" ? m.top + 6 : m.top;
+        a.style.left = `${ax + s * this.bx(m.x + m.w / 2) - hr.left}px`;
+        a.style.top = `${ay + s * this.by(top - 4) - hr.top}px`;
+        a.classList.add("is-placed");
+      });
+      if (this.copyEl && !this.mobile) {
+        const lib = this.marks.get("library")!;
+        const left = ax + s * this.bx(lib.x + lib.w + 14) - hr.left;
+        this.copyEl.style.setProperty("--copy-left", `${Math.round(Math.max(24, left))}px`);
+      }
+    }
+
+    bind() {
+      const signal = this.abort.signal;
+      const ro = new ResizeObserver(() => {
+        const size = `${this.root.clientWidth}x${this.root.clientHeight}`;
+        if (size === this.lastSize) return;
+        this.lastSize = size;
+        this.layout();
+      });
+      ro.observe(this.root);
+      this.observers.push(ro);
+      let sig = "";
+      const mo = new MutationObserver(() => {
+        const cs = getComputedStyle(document.documentElement);
+        const next = [document.documentElement.getAttribute("data-theme"), cs.getPropertyValue("--accent"), cs.getPropertyValue("--g1"), cs.getPropertyValue("--g2")].join("|");
+        if (next === sig) return;
+        sig = next;
+        this.pal = readPalette();
+        this.buildWorld();
+        this.prerender();
+        if (this.reduce) this.draw(performance.now(), true);
+      });
+      mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-palette", "style"] });
+      this.observers.push(mo);
+
+      const onUI = (t: EventTarget | null) => t instanceof Element && !!t.closest("a, button, input, [data-city-copy], .cityhub-status");
+      window.addEventListener("pointermove", (e) => {
+        if (e.pointerType !== "mouse" || this.camAnim) return;
+        if (typeof this.state === "number") {
+          this.setPeek(this.peekHit(e), e.clientX, e.clientY);
+          return;
+        }
+        if (!this.hubEl) return;
+        if (onUI(e.target)) {
+          if (!(e.target instanceof Element && e.target.closest("[data-city-tag]"))) this.setHoverIdx(-1);
+          return;
+        }
+        this.setHoverIdx(this.hit(e.clientX, e.clientY));
+      }, { signal, passive: true });
+      document.documentElement.addEventListener("pointerleave", () => {
+        if (this.state === "hub") this.setHoverIdx(-1);
+        this.setPeek(-1, 0, 0);
+      }, { signal });
+
+      // phones: drag sideways to look along the street
+      window.addEventListener("touchstart", (e) => {
+        if (this.state !== "hub" || !this.mobile || e.touches.length !== 1) return;
+        this.touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, pan: this.pan, moved: false };
+      }, { signal, passive: true });
+      window.addEventListener("touchmove", (e) => {
+        const tc = this.touch;
+        if (!tc || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - tc.x, dy = e.touches[0].clientY - tc.y;
+        if (!tc.moved && Math.abs(dx) < Math.abs(dy)) return;
+        if (Math.abs(dx) > 6) tc.moved = true;
+        this.pan = clampN(tc.pan - dx, -this.panMax, this.panMax);
+        this.hintEl?.classList.add("is-gone");
+      }, { signal, passive: true });
+      window.addEventListener("touchend", () => {
+        if (this.touch?.moved) this.suppressClick = performance.now();
+        this.touch = null;
+      }, { signal });
+
+      let preTap = -1;
+      window.addEventListener("pointerdown", (e) => {
+        preTap = e.pointerType === "mouse" ? -2 : this.hoverIdx;
+      }, { signal });
+      window.addEventListener("click", (e) => {
+        if (this.camAnim || performance.now() - this.suppressClick < 350) return;
+        if (typeof this.state === "number") {
+          const i = this.peekHit(e);
+          if (i < 0) return;
+          this.setPeek(-1, 0, 0);
+          if (i === this.state) {
+            document.querySelector(".bp-body")?.scrollIntoView({ behavior: this.reduce ? "auto" : "smooth" });
+            return;
+          }
+          navigate(this.blocks[i].href);
+          return;
+        }
+        if (!this.hubEl || onUI(e.target)) return;
+        const i = this.hit(e.clientX, e.clientY);
+        if (i >= 0) {
+          // touch: first tap shows the label, second goes in
+          if (preTap !== -2 && preTap !== i) {
+            this.setHoverIdx(i);
+            return;
+          }
+          navigate(this.blocks[i].href);
+          return;
+        }
+        this.setHoverIdx(-1);
+        const [ax, ay] = this.toArt(e.clientX, e.clientY);
+        // the coin in the sky pays out
+        if (Math.hypot(ax - (this.cx + 152), ay - 24) < 12) {
+          for (let k = 0; k < 14; k++) {
+            this.particles.push({ kind: "coin", x: this.cx + 152 + (Math.random() - 0.5) * 8, y: 30, vx: (Math.random() - 0.5) * 60, vy: -30 - Math.random() * 40, born: this.lastT, life: 2.2 });
+          }
+          return;
+        }
+        if (ay < this.gY - 20) this.firework(ax, ay);
+      }, { signal });
+      // type "gm" anywhere (outside a text field) for a show over the city
+      let keys = "";
+      window.addEventListener("keydown", (e) => {
+        const tg = e.target as HTMLElement | null;
+        if (e.metaKey || e.ctrlKey || (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName)))) return;
+        keys = (keys + e.key.toLowerCase()).slice(-4);
+        if (keys.endsWith("gm")) {
+          keys = "";
+          for (let i = 0; i < 4; i++) setTimeout(() => this.firework(), i * 240);
+        }
+      }, { signal });
+      document.addEventListener("chain:gm", () => {
+        for (let i = 0; i < 5; i++) setTimeout(() => this.firework(), i * 260);
+      }, { signal });
+    }
+    suppressClick = 0;
+  }
+
+  let city: PixelCity | null = null;
+  document.addEventListener("astro:page-load", () => {
+    const root = document.querySelector<HTMLElement>("[data-world-pixel]");
+    if (!root || document.documentElement.dataset.worldMode !== "pixel") {
+      city?.destroy();
+      city = null;
+      return;
+    }
+    if (!city || city.root !== root) {
+      city?.destroy();
+      city = new PixelCity(root);
+    }
+    city.setPage();
+  });
+</script>

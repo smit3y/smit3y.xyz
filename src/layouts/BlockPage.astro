@@ -1,0 +1,468 @@
+---
+// A block page: the explorer-style header (with that block's room still
+// running), then the section of the site the block opens into, then a way to
+// walk the chain to the neighbouring blocks.
+import BaseLayout from "./BaseLayout.astro";
+import ChainRail from "../components/ChainRail.astro";
+import { BLOCKS, NODE_COLORS, shortHash } from "../lib/chain";
+import { chainHashes } from "../lib/chain-hash";
+
+interface Props {
+  index: number;
+  title?: string;
+}
+
+const { index, title } = Astro.props;
+const block = BLOCKS[index];
+const hashes = chainHashes();
+const { hash, parent } = hashes[index];
+const pending = block.scene === "pending";
+const tip = BLOCKS.length - 2;
+const status = pending ? "pending · in the mempool" : `confirmed · ${tip - index + 1} confirmation${tip - index ? "s" : ""}`;
+const prev = BLOCKS[index - 1];
+const next = BLOCKS[index + 1];
+const backHref = "/";
+const color = NODE_COLORS[index];
+---
+
+<BaseLayout title={title ?? `${block.label} · Block #${index} | smit3y.xyz`} fullBleed={true} world>
+  <div
+    class="bp"
+    data-world={`focus:${index}`}
+    data-block-page
+    data-block-id={block.id}
+    data-back={backHref}
+    data-prev={prev?.href ?? ""}
+    data-next={next?.href ?? ""}
+    data-index={index}
+    style={`--c:${color}`}
+  >
+    <header class="bp-head">
+      <div class="bp-bar">
+        <a class="bp-back" href={backHref}>
+          <span class="bp-back-arrow" aria-hidden="true">←</span>
+          <span data-back-label>Back to chain</span>
+          <kbd class="bp-kbd" aria-hidden="true">esc</kbd>
+        </a>
+        <p class="bp-ride" aria-hidden="true"><kbd>←</kbd><kbd>→</kbd> or swipe to ride the chain</p>
+      </div>
+
+      <div class="bp-grid">
+        <div class="bp-meta">
+          <p class="bp-kicker">
+            <span class:list={["bp-dot", pending && "bp-dot--pending"]} aria-hidden="true"></span>
+            Block #{index} · {status}
+          </p>
+          <h1 class="bp-title">{block.title}</h1>
+          <dl class="bp-rows">
+            <div><dt>hash</dt><dd title={hash || undefined}>{pending ? "—" : shortHash(hash)}</dd></div>
+            <div><dt>parent</dt><dd title={parent}>{shortHash(parent)}</dd></div>
+            <div><dt>time</dt><dd>{block.time}</dd></div>
+          </dl>
+          <ul class="bp-tx">
+            {block.tx.map((t) => <li>{t}</li>)}
+          </ul>
+        </div>
+        <!-- the shared world's camera parks this block right here -->
+        <div class="bp-room" data-world-anchor aria-hidden="true"></div>
+      </div>
+    </header>
+
+    <div class="bp-body">
+      <slot />
+    </div>
+
+    <ChainRail index={index} />
+  </div>
+</BaseLayout>
+
+<style>
+  /* same backdrop as the classic page, so pages without one of its sections
+     (like /next) still sit on the site's ground */
+  :global(body) {
+    background:
+      radial-gradient(circle at 12% 12%, var(--glow-6), transparent 32rem),
+      radial-gradient(circle at 90% 8%, var(--glow-7), transparent 34rem),
+      radial-gradient(circle at 50% 78%, var(--glow-5), transparent 30rem),
+      var(--bg-1);
+  }
+
+  .bp {
+    --bp-col: min(100% - 2 * max(16px, env(safe-area-inset-left, 0px)), 72rem);
+  }
+
+  .bp-head {
+    position: relative;
+    border-bottom: 1px solid color-mix(in srgb, var(--c) 35%, transparent);
+    box-shadow: 0 1px 18px -6px color-mix(in srgb, var(--c) 55%, transparent);
+    background: linear-gradient(90deg, color-mix(in srgb, var(--bg-1) 88%, transparent) 0%, color-mix(in srgb, var(--bg-1) 55%, transparent) 42%, transparent 62%);
+  }
+
+  .bp-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem 1.25rem;
+    width: var(--bp-col);
+    margin: 0 auto;
+    padding-top: 1.25rem;
+  }
+
+  .bp-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--c) 50%, var(--border-6));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    color: var(--text-heading);
+    font-size: 0.82rem;
+    letter-spacing: 0.08em;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: background-color 160ms ease, border-color 160ms ease;
+  }
+
+  .bp-back:hover,
+  .bp-back:focus-visible {
+    border-color: var(--c);
+    background: color-mix(in srgb, var(--c) 16%, var(--bg-0));
+    box-shadow: 0 0 16px color-mix(in srgb, var(--c) 35%, transparent);
+    outline: none;
+  }
+
+  .bp-back-arrow {
+    transition: transform 160ms ease;
+  }
+
+  .bp-back:hover .bp-back-arrow {
+    transform: translateX(-3px);
+  }
+
+  .bp-kbd {
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--border-6);
+    border-radius: 0.3rem;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.68rem;
+    text-transform: lowercase;
+  }
+
+  .bp-ride {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin: 0;
+    color: var(--text-dim);
+    font: 600 0.72rem/1 Inconsolata, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .bp-ride kbd {
+    padding: 0.12rem 0.32rem;
+    border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border-6));
+    border-radius: 0.3rem;
+    color: var(--c);
+    font: inherit;
+  }
+
+  .bp-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    align-items: center;
+    gap: 1rem 2rem;
+    width: var(--bp-col);
+    margin: 0 auto;
+  }
+
+  .bp-meta {
+    display: grid;
+    gap: 0.85rem;
+    min-width: 0;
+    padding: 1.5rem 0 2.25rem;
+  }
+
+  .bp-kicker {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin: 0;
+    color: var(--text-sub);
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .bp-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #3ddc84;
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, #3ddc84 20%, transparent);
+  }
+
+  .bp-dot--pending {
+    background: var(--c);
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--c) 20%, transparent);
+    animation: bp-blink 1.4s steps(1) infinite;
+  }
+
+  @keyframes bp-blink {
+    50% { opacity: 0.25; }
+  }
+
+  .bp-title {
+    margin: 0;
+    background: linear-gradient(100deg, color-mix(in srgb, var(--c) 55%, #fff) 0%, var(--c) 55%, color-mix(in srgb, var(--c) 70%, #ff5aa8) 100%);
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--c) 38%, transparent));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-size: clamp(2rem, 4.4vw, 3.4rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.02;
+    text-wrap: balance;
+  }
+
+  /* in daylight the neon reads as ink: same hue, deep enough to stay legible */
+  :global([data-theme="light"]) .bp {
+    --c-ink: color-mix(in srgb, var(--c) 55%, #120a2e);
+  }
+
+  :global([data-theme="light"]) .bp-title {
+    background-image: linear-gradient(100deg, var(--c-ink) 0%, color-mix(in srgb, var(--c) 72%, #120a2e) 100%);
+    filter: none;
+  }
+
+  :global([data-theme="light"]) .bp-tx li::before {
+    color: var(--c-ink);
+  }
+
+  .bp-rows {
+    display: grid;
+    gap: 0.25rem;
+    max-width: 26rem;
+    margin: 0;
+    padding: 0.65rem 0;
+    border-block: 1px dashed color-mix(in srgb, var(--c) 35%, var(--border-6));
+    font-size: 0.86rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bp-rows div {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+  }
+
+  .bp-rows dt {
+    color: var(--text-dim);
+  }
+
+  .bp-rows dd {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-lead);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .bp-tx {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .bp-tx li {
+    display: flex;
+    gap: 0.55rem;
+    color: var(--text-body);
+    font-size: 0.95rem;
+  }
+
+  .bp-tx li::before {
+    flex: none;
+    color: var(--c);
+    content: "tx";
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    line-height: 1.75;
+  }
+
+  .bp-meta {
+    view-transition-name: bp-meta;
+  }
+
+  .bp-room {
+    position: relative;
+    height: clamp(17rem, 30vw, 24rem);
+    min-width: 0;
+  }
+
+  /* content scrolls up over the world on a solid ground */
+  .bp-body {
+    position: relative;
+    background: var(--bg-1);
+    view-transition-name: bp-body;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 760px) {
+    .bp-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .bp-meta {
+      padding-bottom: 0;
+    }
+
+    .bp-room {
+      height: 16rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .bp-kbd,
+    .bp-ride {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+  import { VISITED_KEY } from "../lib/chain";
+
+  // remember this block as explored; light up explored cubes
+  document.addEventListener("astro:page-load", () => {
+    const page = document.querySelector<HTMLElement>("[data-block-page]");
+    if (!page) return;
+    const id = page.dataset.blockId ?? "";
+    // "back" returns to whichever hub this visit came from
+    const mode = document.documentElement.dataset.worldMode;
+    const hub = mode === "pixel" ? "/city" : "/";
+    const city = mode === "pixel" || mode === "neon";
+    page.dataset.back = hub;
+    page.querySelectorAll<HTMLAnchorElement>(".bp-back, [data-rail-city]").forEach((a) => (a.href = hub));
+    const set = (sel: string, text: string) => page.querySelectorAll(sel).forEach((n) => (n.textContent = text));
+    if (city) {
+      set("[data-back-label]", "Back to the city");
+    }
+    let visited: string[] = [];
+    try {
+      const raw = JSON.parse(localStorage.getItem(VISITED_KEY) || "[]");
+      if (Array.isArray(raw)) visited = raw.filter((v) => typeof v === "string");
+      if (!visited.includes(id)) visited.push(id);
+      localStorage.setItem(VISITED_KEY, JSON.stringify(visited));
+    } catch {
+      visited = [id];
+    }
+    for (const cube of page.querySelectorAll<HTMLElement>("[data-cube]")) {
+      cube.classList.toggle("is-visited", visited.includes(cube.dataset.cube ?? ""));
+    }
+  });
+
+  // which way we're riding: tower pages slide in from the side you're heading
+  const indexOf = (url: URL) => {
+    const links = [...document.querySelectorAll<HTMLAnchorElement>("[data-rail] .rail-node")];
+    return links.findIndex((a) => new URL(a.href).pathname === url.pathname);
+  };
+  let walk = "";
+  document.addEventListener("astro:before-preparation", (e) => {
+    const from = indexOf(e.from), to = indexOf(e.to);
+    walk = from >= 0 && to >= 0 && from !== to ? (to > from ? "next" : "prev") : "";
+    if (walk) document.documentElement.dataset.walk = walk;
+    else delete document.documentElement.dataset.walk;
+  });
+  // the swap copies the new page's <html> attributes, so put it back for the animation
+  document.addEventListener("astro:after-swap", () => {
+    if (walk) document.documentElement.dataset.walk = walk;
+    window.setTimeout(() => {
+      if (document.documentElement.dataset.walk === walk) delete document.documentElement.dataset.walk;
+    }, 900);
+  });
+
+  // ride sideways: a horizontal trackpad swipe or a swipe on touch moves one tower over
+  const sideScroller = (el: EventTarget | null) => {
+    for (let n = el instanceof Element ? el : null; n && n !== document.body; n = n.parentElement) {
+      const ox = getComputedStyle(n).overflowX;
+      if ((ox === "auto" || ox === "scroll") && n.scrollWidth > n.clientWidth + 2) return true;
+    }
+    return false;
+  };
+  let acc = 0, accAt = 0, lockUntil = 0;
+  const step = (dir: 1 | -1) => {
+    const page = document.querySelector<HTMLElement>("[data-block-page]");
+    if (!page || performance.now() < lockUntil) return;
+    const href = dir > 0 ? page.dataset.next : page.dataset.prev;
+    if (!href) return;
+    lockUntil = performance.now() + 1300;
+    navigate(href);
+  };
+  window.addEventListener(
+    "wheel",
+    (e) => {
+      if (!document.querySelector("[data-block-page]")) return;
+      if (Math.abs(e.deltaX) < Math.abs(e.deltaY) * 1.4 || sideScroller(e.target)) return;
+      const now = performance.now();
+      if (now - accAt > 220) acc = 0;
+      accAt = now;
+      acc += e.deltaX;
+      if (now < lockUntil) return;
+      if (Math.abs(acc) > 110) {
+        step(acc > 0 ? 1 : -1);
+        acc = 0;
+      }
+    },
+    { passive: true },
+  );
+  let touch: { x: number; y: number; t: number; skip: boolean } | null = null;
+  window.addEventListener(
+    "touchstart",
+    (e) => {
+      const p = e.touches[0];
+      touch = e.touches.length === 1 ? { x: p.clientX, y: p.clientY, t: performance.now(), skip: sideScroller(e.target) } : null;
+    },
+    { passive: true },
+  );
+  window.addEventListener(
+    "touchend",
+    (e) => {
+      if (!touch || touch.skip || !document.querySelector("[data-block-page]")) return;
+      const p = e.changedTouches[0];
+      const dx = p.clientX - touch.x, dy = p.clientY - touch.y;
+      if (performance.now() - touch.t < 700 && Math.abs(dx) > 70 && Math.abs(dx) > Math.abs(dy) * 2) step(dx < 0 ? 1 : -1);
+      touch = null;
+    },
+    { passive: true },
+  );
+
+  // keyboard: esc goes back to the chain, arrows walk it (bound once; reads
+  // whichever block page is current)
+  document.addEventListener("keydown", (e) => {
+    const page = document.querySelector<HTMLElement>("[data-block-page]");
+    if (!page || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = e.target as HTMLElement | null;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    const go = (href?: string) => {
+      if (!href) return;
+      e.preventDefault();
+      navigate(href);
+    };
+    if (e.key === "Escape") go(page.dataset.back);
+    else if (e.key === "ArrowLeft") go(page.dataset.prev);
+    else if (e.key === "ArrowRight") go(page.dataset.next);
+  });
+</script>

@@ -1,0 +1,99 @@
+---
+// Floating switcher for comparing the 2D city prototypes side by side.
+const current = Astro.url.pathname.replace(/\/$/, "") || "/";
+const versions = [
+  { href: "/city", name: "Pixel Skyline", key: "A" },
+  { href: "/", name: "Neon Harbor", key: "D" },
+];
+---
+
+<nav class="picker" aria-label="City versions">
+  <span class="picker-label">2D drafts</span>
+  {
+    versions.map((v) => (
+      <a href={v.href} class:list={["picker-link", { "is-on": current === v.href }]} aria-current={current === v.href ? "page" : undefined}>
+        <span class="picker-num">{v.key}</span>
+        <span class="picker-name">{v.name}</span>
+      </a>
+    ))
+  }
+</nav>
+
+<style>
+  .picker {
+    position: fixed;
+    top: 92px;
+    right: max(12px, env(safe-area-inset-right, 0px));
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: calc(100vw - 24px);
+    padding: 5px;
+    border: 1px solid color-mix(in srgb, var(--text-heading) 16%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-0) 82%, transparent);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    font-family: Inconsolata, monospace;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .picker-label {
+    padding: 0 8px 0 10px;
+    color: var(--text-sub);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .picker-link {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px 6px 6px;
+    border-radius: 999px;
+    color: var(--text-lead);
+    font-size: 13px;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 150ms, color 150ms;
+  }
+
+  .picker-link:hover {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .picker-link.is-on {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .picker-num {
+    display: grid;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text-heading) 12%, transparent);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .picker-link.is-on .picker-num {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  @media (max-width: 640px) {
+    .picker-label,
+    .picker-name {
+      display: none;
+    }
+
+    .picker-link {
+      padding: 6px;
+    }
+  }
+</style>

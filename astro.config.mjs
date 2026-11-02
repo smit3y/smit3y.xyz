@@ -16,5 +16,9 @@ export default defineConfig({
   },
 
   adapter: netlify(),
+  // pages load ahead of time on hover, so stepping into a block is instant
+  prefetch: { prefetchAll: true, defaultStrategy: "hover" },
+  // Neon Harbor became the homepage
+  redirects: { "/city/neon": "/" },
   integrations: [react()],
 });

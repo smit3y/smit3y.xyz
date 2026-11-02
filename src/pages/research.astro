@@ -1,5 +1,5 @@
 ---
-import BaseLayout from "../layouts/BaseLayout.astro";
+import BlockPage from "../layouts/BlockPage.astro";
 import {
   RESEARCH_PAGE_SIZE,
   getResearchPage,
@@ -17,7 +17,7 @@ const pageHref = (page: number) =>
   page === 1 ? "/research" : `/research/page/${page}`;
 ---
 
-<BaseLayout title="Research | smit3y.xyz" fullBleed={true}>
+<BlockPage index={2} title="Research | smit3y.xyz">
   <section class="research-list-page">
     <header class="research-list-header">
       <p class="section-kicker">// RESEARCH</p>
@@ -75,7 +75,7 @@ const pageHref = (page: number) =>
       )
     }
   </section>
-</BaseLayout>
+</BlockPage>
 
 <style>
   :global(body) {

@@ -1,0 +1,12 @@
+---
+// Draft A: Pixel Skyline — the pixel city as the hub. The city itself is
+// the persistent world (PixelWorld) that block pages zoom into.
+import BaseLayout from "../layouts/BaseLayout.astro";
+import CityHub from "../components/CityHub.astro";
+import CityPicker from "../components/CityPicker.astro";
+---
+
+<BaseLayout title="smit3y.xyz · pixel skyline" fullBleed={true} world worldMode="pixel">
+  <CityHub mode="pixel" />
+  <CityPicker />
+</BaseLayout>

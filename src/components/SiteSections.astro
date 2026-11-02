@@ -1,0 +1,1913 @@
+---
+// Every section of the original long-scroll homepage, unchanged. The classic
+// page renders them all; each block page renders just the one it opens into.
+import { loadResearchEntries } from "../lib/research";
+import { experienceEntries, snyStats, snyServices, snyFounders } from "../lib/site-data";
+import { BLOCKS } from "../lib/chain";
+import LetterGlitch from "./LetterGlitchWaves.tsx";
+import AboutCollage from "./AboutCollage.astro";
+import NumberRain from "./NumberRain.astro";
+
+type Section = "home" | "about" | "research" | "experience" | "sny";
+interface Props {
+  /** Render only these sections (default: all, including the hero). */
+  only?: Section[];
+  /** Limit the experience timeline to these role slugs. */
+  roles?: string[];
+  /** Link each experience entry to its block page. */
+  blockLinks?: boolean;
+}
+
+const { only, roles, blockLinks = false } = Astro.props;
+const show = (s: Section) => !only || only.includes(s);
+const roleEntries = roles ? experienceEntries.filter((e) => roles.includes(e.slug)) : experienceEntries;
+
+const heroTitle = "SMIT3Y.XYZ";
+// Splits a heading into words for the kinetic scroll-reveal treatment —
+// each word gets its own [data-reveal] + --i so they cascade in on scroll
+// (reuses the same reveal mechanism as everything else, see global.css).
+const kineticWords = (text: string) => text.split(" ");
+const researchEntries = loadResearchEntries();
+---
+
+  {show("home") && (
+  <section id="home" class="home-section" aria-label="Home">
+    <div class="hero-backdrop" aria-hidden="true">
+      <LetterGlitch
+        client:load
+        glitchSpeed={50}
+        centerVignette={false}
+        outerVignette={false}
+        smooth={true}
+        waveCurvature={50}
+        waveWavelength={1400}
+        waveBandThickness={200}
+        waveAngleDeg={55}
+      />
+      <div class="hero-fade-bottom"></div>
+    </div>
+    <div class="hero-content">
+      <p class="hero-typewriter" aria-hidden="true" data-typewriter="&gt; whoami"></p>
+      <h1
+        class="hero-title magnetic"
+        id="hero-title"
+        aria-label={heroTitle}
+        data-magnetic-strength="0.16"
+        data-magnetic-max="32"
+      >
+        <span aria-hidden="true">
+          {
+            heroTitle.split("").map((ch, i) => (
+              <span class="hero-letter" data-char={ch} style={`--i: ${i}`}>
+                {ch}
+              </span>
+            ))
+          }
+        </span>
+      </h1>
+      <div class="hero-actions" aria-label="Featured actions">
+        <a class="hero-action hero-action-primary magnetic" href="#research">
+          VIEW RESEARCH <span aria-hidden="true">→</span>
+        </a>
+        <a class="hero-action hero-action-secondary magnetic" href="#about">ABOUT ME</a>
+      </div>
+    </div>
+    <a class="scroll-cue" href="#about" aria-label="Scroll to about section">
+      <span>SCROLL TO EXPLORE</span>
+      <span aria-hidden="true">⌄</span>
+    </a>
+  </section>
+  )}
+  {show("about") && (
+  <section id="about" class="about-section" aria-label="About">
+    <NumberRain side="left" />
+    <NumberRain side="right" />
+    <div class="about-shell">
+      <p class="about-kicker" data-reveal>// ABOUT</p>
+      <h2 class="about-title">
+        {
+          kineticWords("Who Am I").map((word, i) => (
+            <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+              {word}
+            </span>
+          ))
+        }
+      </h2>
+      <div class="about-socials" data-reveal style="--i: 3">
+        <a
+          class="about-social-link magnetic"
+          href="https://www.linkedin.com/in/ssam-smith/"
+          target="_blank"
+          rel="noopener noreferrer me"
+          data-magnetic-strength="0.25"
+          data-magnetic-max="8"
+        >
+          <span class="about-social-link__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor" focusable="false">
+              <path d="M6.94 8.5H3.56V20h3.38V8.5ZM5.25 7c1.12 0 1.87-.75 1.87-1.75C7.12 4.25 6.37 3.5 5.25 3.5 4.13 3.5 3.38 4.25 3.38 5.25 3.38 6.25 4.13 7 5.25 7ZM20.44 20h-3.38v-6.13c0-1.5-.53-2.5-1.87-2.5-1.02 0-1.63.69-1.9 1.35-.1.24-.12.58-.12.92V20h-3.38s.05-10.44 0-11.5h3.38v1.63c.45-.7 1.25-1.7 3.04-1.7 2.22 0 3.88 1.45 3.88 4.56V20Z" />
+            </svg>
+          </span>
+          LinkedIn
+        </a>
+        <a
+          class="about-social-link magnetic"
+          href="https://x.com/smit3y_"
+          target="_blank"
+          rel="noopener noreferrer me"
+          data-magnetic-strength="0.25"
+          data-magnetic-max="8"
+        >
+          <span class="about-social-link__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor" focusable="false">
+              <path d="M13.6 10.6 20.4 3h-1.9l-5.6 6.6L8.3 3H3l7.1 10.1L3 21h1.9l6-7 5.1 7H21l-7.4-10.4Zm-2.1 2.5-.7-1L5.3 4.4h2.1l4.4 6.3.7 1 5.8 8.2h-2.1l-4.7-6.7Z" />
+            </svg>
+          </span>
+          X
+        </a>
+      </div>
+      <div class="about-content">
+        <div class="about-aside">
+          <AboutCollage />
+        </div>
+        <div class="about-text">
+          <p class="about-paragraph about-paragraph-lead" data-reveal style="--i: 0">
+            I am a builder, basketball player, and researcher based out of New
+            York City.
+          </p>
+          <p class="about-paragraph" data-reveal style="--i: 1">
+            My passion lies in studying digital assets, macro trends, finding
+            gems amongst equities, and debating with friends about our
+            ever-moving world.
+          </p>
+          <p class="about-paragraph" data-reveal style="--i: 2">
+            I study Economics and Psychology at the University of Michigan,
+            Class of 2027.
+          </p>
+          <p class="about-paragraph" data-reveal style="--i: 3">
+            I have lived in San Diego (where I am from) — Cairo, Egypt —
+            Singapore — Chengdu, China — and Ann Arbor, Michigan.
+          </p>
+          <p class="about-paragraph" data-reveal style="--i: 4">
+            I am an avid Cavaliers fan, an annoying Michigan sports fan, an
+            enormous Chinatown eater, a bigger podcast listener, and an aspiring
+            runner.
+          </p>
+          <p class="about-paragraph" data-reveal style="--i: 5">
+            My close friends call me Smitty, and that is where I have derived
+            the name for this website.
+          </p>
+          <div class="about-signoff" data-reveal style="--i: 6">
+            <p class="about-signoff__welcome">Welcome to</p>
+            <p class="about-signoff__line">
+              <span class="about-signoff__prompt" aria-hidden="true">&gt;</span>
+              <span
+                class="about-signoff__mark magnetic"
+                id="about-signoff"
+                aria-label="smit3y.xyz"
+                data-magnetic-strength="0.3"
+                data-magnetic-max="10"
+              >
+                <span aria-hidden="true">
+                  {
+                    "smit3y.xyz".split("").map((ch, i) => (
+                      <span class="about-signoff__letter" data-char={ch} style={`--i: ${i}`}>
+                        {ch}
+                      </span>
+                    ))
+                  }
+                </span>
+              </span>
+              <span class="about-signoff__cursor" aria-hidden="true"></span>
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  )}
+  {show("research") && (
+  <section id="research" class="research-section" aria-label="Research">
+    <NumberRain side="left" />
+    <NumberRain side="right" />
+    <div class="research-header">
+      <p class="section-kicker" data-reveal>// RESEARCH</p>
+      <h2>
+        {
+          kineticWords("Investment Theses").map((word, i) => (
+            <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+              {word}
+            </span>
+          ))
+        }
+      </h2>
+      <p data-reveal style="--i: 2">
+        I like to research beaten-down equities, trends I believe in and am
+        invested in, digital assets, and decentralized finance. My work is
+        published below:
+      </p>
+    </div>
+    <div class="research-grid">
+      {
+        researchEntries.map((entry, index) => (
+          <a
+            class="research-card glow-card"
+            href={entry.href}
+            {...(entry.url && { target: "_blank", rel: "noopener noreferrer" })}
+            data-reveal
+            style={`--i: ${index}`}
+          >
+            {entry.badge && (
+              <span class="research-card-badge">{entry.badge}</span>
+            )}
+            <span class="research-card-label">
+              {entry.stockLabel || entry.title.split(" ")[0]}
+            </span>
+            <span class="research-card-title">{entry.title}</span>
+            <span class="research-card-footer">
+              {entry.date && (
+                <time class="research-card-date" datetime={entry.date}>
+                  {new Date(entry.date).toLocaleDateString("en-US", {
+                    month: "short",
+                    year: "numeric",
+                    timeZone: "UTC",
+                  })}
+                </time>
+              )}
+              <span class="research-card-arrow" aria-hidden="true">
+                {entry.url ? "↗" : "→"}
+              </span>
+            </span>
+          </a>
+        ))
+      }
+    </div>
+    <div class="research-actions">
+      <a class="research-see-all magnetic" href="/research">See All</a>
+    </div>
+  </section>
+  )}
+  {show("experience") && (
+  <section id="experience" class="experience-section" aria-label="Experience">
+    <NumberRain side="left" />
+    <NumberRain side="right" />
+    <div class="experience-shell">
+      <div class="experience-header">
+        <p class="section-kicker" data-reveal>// EXPERIENCE</p>
+        <h2>
+          {
+            kineticWords("Where I've Worked").map((word, i) => (
+              <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+                {word}
+              </span>
+            ))
+          }
+        </h2>
+      </div>
+      <div class="experience-timeline">
+        {
+          roleEntries.map((entry) => (
+            <article class="experience-item glow-card" id={`role-${entry.slug}`}>
+              <p class="experience-period">{entry.period}</p>
+              <h3 class="experience-role">{entry.role}</h3>
+              {entry.organization && entry.organizationUrl && (
+                <a
+                  class="experience-organization experience-organization--link"
+                  href={entry.organizationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {entry.organization}
+                </a>
+              )}
+              {entry.organization && !entry.organizationUrl && (
+                <p class="experience-organization">{entry.organization}</p>
+              )}
+              <ul class="experience-points">
+                {entry.bullets.map((point) => (
+                  <li>{point}</li>
+                ))}
+              </ul>
+              {blockLinks && entry.block !== null && BLOCKS[entry.block] && (
+                <a class="experience-block-link" href={BLOCKS[entry.block].href}>
+                  <span>Block #{entry.block}</span> Step inside <span aria-hidden="true">→</span>
+                </a>
+              )}
+            </article>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+  )}
+  {show("sny") && (
+  <section id="sny" class="sny-section" aria-label="S and Y Scholars">
+    <NumberRain side="left" />
+    <NumberRain side="right" />
+    <div class="sny-shell">
+      <header class="sny-header">
+        <h2>
+          {
+            kineticWords("S&Y Scholars").map((word, i) => (
+              <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+                {word}
+              </span>
+            ))
+          }
+        </h2>
+        <p data-reveal style="--i: 1">
+          Guidance from students who were in your shoes yesterday. Peer-to-peer
+          college admissions consulting.
+        </p>
+        <a
+          class="sny-award magnetic"
+          href="https://www.nytimes.com/2023/12/16/your-money/college-essays-money.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          data-reveal
+          style="--i: 2"
+          data-magnetic-strength="0.2"
+          data-magnetic-max="8"
+        >
+          <span class="sny-award__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" focusable="false">
+              <path
+                d="M7 4h10v3a5 5 0 0 1-10 0V4Z"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M7 5H4a3 3 0 0 0 3 4M17 5h3a3 3 0 0 1-3 4"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+              <path
+                d="M12 12v3.5M9.5 19.5h5M10.5 15.5h3v4h-3v-4Z"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </span>
+          Featured in The New York Times — Winner, 2023 College Essay Challenge
+          <span class="sny-award__arrow" aria-hidden="true">→</span>
+        </a>
+      </header>
+
+      <div class="sny-stats" aria-label="S and Y Scholars results">
+        {
+          snyStats.map((stat, index) => (
+            <article
+              class:list={["sny-stat-card", "glow-card", index === 0 && "sny-stat-card--featured"]}
+              data-reveal
+              style={`--i: ${index}`}
+            >
+              <p class="sny-stat-value" data-count={stat.value}>0</p>
+              <p class="sny-stat-label">{stat.label}</p>
+              {stat.detail && <p class="sny-stat-detail">{stat.detail}</p>}
+            </article>
+          ))
+        }
+      </div>
+
+      <div class="sny-services">
+        <p class="section-kicker" data-reveal>// SERVICES</p>
+        <h3>
+          {
+            kineticWords("What We Offer").map((word, i) => (
+              <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+                {word}
+              </span>
+            ))
+          }
+        </h3>
+        <div class="sny-services-grid">
+          {
+            snyServices.map((service, index) => (
+              <article class="sny-service-card glow-card" data-reveal style={`--i: ${index}`}>
+                <span class="sny-service-icon" aria-hidden="true">
+                  {service.icon === "microphone" && (
+                    <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                      <path
+                        d="M12 3a3 3 0 0 1 3 3v5a3 3 0 1 1-6 0V6a3 3 0 0 1 3-3Z"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                      <path
+                        d="M6.5 10.5a5.5 5.5 0 0 0 11 0M12 16v4M9 20h6"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  )}
+                  {service.icon === "pen" && (
+                    <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                      <path
+                        d="m4 20 4-1 10-10-3-3L5 16l-1 4Z"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                      <path
+                        d="m13 6 3 3M4 20l4-4"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  )}
+                  {service.icon === "target" && (
+                    <svg viewBox="0 0 24 24" fill="none" focusable="false">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="8"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                      />
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="4"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                      />
+                      <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+                    </svg>
+                  )}
+                </span>
+                <h4>{service.title}</h4>
+                <p>{service.description}</p>
+              </article>
+            ))
+          }
+        </div>
+      </div>
+
+      <div class="sny-team">
+        <p class="section-kicker" data-reveal>// TEAM</p>
+        <h3>
+          {
+            kineticWords("Meet the Founders").map((word, i) => (
+              <span class="kinetic-word" data-reveal style={`--i: ${i}`}>
+                {word}
+              </span>
+            ))
+          }
+        </h3>
+        <div class="sny-founders-grid">
+          {
+            snyFounders.map((founder, index) => (
+              <article class="sny-founder-card glow-card" data-reveal style={`--i: ${index}`}>
+                <h4>{founder.name}</h4>
+                <p class="sny-founder-school">{founder.school}</p>
+                <p>{founder.bio}</p>
+                {founder.linkedin && (
+                  <a
+                    class="sny-founder-linkedin"
+                    href={founder.linkedin}
+                    target="_blank"
+                    rel="noopener noreferrer me"
+                  >
+                    LinkedIn <span aria-hidden="true">→</span>
+                  </a>
+                )}
+              </article>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  </section>
+  )}
+
+  <script>
+    import { scrambleOnHover, jumbleLetters, decodeLetters } from "../lib/scramble";
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    // Runs on every page load (client-side navigation swaps pages in without
+    // re-running module scripts), and only touches this page's sections.
+    const initSections = () => {
+
+    const experienceItems = Array.from(
+      document.querySelectorAll<HTMLElement>(".experience-item"),
+    );
+
+    const revealAllExperienceItems = () => {
+      for (const item of experienceItems) {
+        item.classList.add("is-visible");
+      }
+    };
+
+    if (experienceItems.length > 0) {
+      if (reduceMotion.matches || !("IntersectionObserver" in window)) {
+        revealAllExperienceItems();
+      } else {
+        const experienceObserver = new IntersectionObserver(
+          (entries, observer) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              entry.target.classList.add("is-visible");
+              observer.unobserve(entry.target);
+            }
+          },
+          { threshold: 0.22, rootMargin: "0px 0px -8% 0px" },
+        );
+
+        experienceItems.forEach((item, index) => {
+          item.style.transitionDelay = `${Math.min(index * 90, 300)}ms`;
+          experienceObserver.observe(item);
+        });
+
+        reduceMotion.addEventListener("change", () => {
+          if (!reduceMotion.matches) return;
+          experienceObserver.disconnect();
+          revealAllExperienceItems();
+        });
+      }
+    }
+
+    // Generic scroll reveal for [data-reveal] elements (headings,
+    // paragraphs, card-grid items). --i (set inline per item) staggers
+    // a group's entrance via a CSS transition-delay. Where the browser
+    // supports native scroll-driven animations, the matching
+    // @supports (animation-timeline: view()) rule in global.css drives
+    // this directly off scroll position instead — skip the observer
+    // entirely there so only one reveal mechanism runs.
+    const supportsViewTimeline = "CSS" in window && CSS.supports("animation-timeline: view()");
+    const revealItems = supportsViewTimeline
+      ? []
+      : Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
+
+    const revealAll = () => {
+      for (const item of revealItems) item.classList.add("is-visible");
+    };
+
+    if (revealItems.length > 0) {
+      if (reduceMotion.matches || !("IntersectionObserver" in window)) {
+        revealAll();
+      } else {
+        const revealObserver = new IntersectionObserver(
+          (entries, observer) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              entry.target.classList.add("is-visible");
+              observer.unobserve(entry.target);
+            }
+          },
+          { threshold: 0.2, rootMargin: "0px 0px -8% 0px" },
+        );
+
+        for (const item of revealItems) revealObserver.observe(item);
+
+        reduceMotion.addEventListener("change", () => {
+          if (!reduceMotion.matches) return;
+          revealObserver.disconnect();
+          revealAll();
+        });
+      }
+    }
+
+    // Count-up animation for [data-count] stat values (e.g. "75%+", "4.7").
+    // Parses the leading numeric portion and animates toward it, keeping
+    // the original suffix and decimal precision.
+    const countEls = Array.from(document.querySelectorAll<HTMLElement>("[data-count]"));
+
+    const animateCount = (el: HTMLElement) => {
+      const raw = el.dataset.count ?? "";
+      const match = raw.match(/^([\d.]+)(.*)$/);
+      if (!match) {
+        el.textContent = raw;
+        return;
+      }
+      const [, numStr, suffix] = match;
+      const target = parseFloat(numStr);
+      const decimals = numStr.includes(".") ? numStr.split(".")[1].length : 0;
+      if (reduceMotion.matches || Number.isNaN(target)) {
+        el.textContent = raw;
+        return;
+      }
+
+      const duration = 1200;
+      const start = performance.now();
+
+      const tick = (now: number) => {
+        const progress = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const value = target * eased;
+        el.textContent = `${value.toFixed(decimals)}${suffix}`;
+        if (progress < 1) requestAnimationFrame(tick);
+      };
+
+      requestAnimationFrame(tick);
+    };
+
+    if (countEls.length > 0) {
+      if (reduceMotion.matches || !("IntersectionObserver" in window)) {
+        for (const el of countEls) el.textContent = el.dataset.count ?? "";
+      } else {
+        const countObserver = new IntersectionObserver(
+          (entries, observer) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              animateCount(entry.target as HTMLElement);
+              observer.unobserve(entry.target);
+            }
+          },
+          { threshold: 0.4 },
+        );
+
+        for (const el of countEls) countObserver.observe(el);
+      }
+    }
+
+    // Typewriter intro line above the hero title.
+    const typewriterEl = document.querySelector<HTMLElement>("[data-typewriter]");
+    if (typewriterEl) {
+      const full = typewriterEl.dataset.typewriter ?? "";
+      if (reduceMotion.matches) {
+        typewriterEl.textContent = full;
+        typewriterEl.classList.add("is-done");
+      } else {
+        typewriterEl.classList.add("is-typing");
+        let i = 0;
+        const step = () => {
+          i += 1;
+          typewriterEl.textContent = full.slice(0, i);
+          if (i < full.length) {
+            setTimeout(step, 34);
+          } else {
+            typewriterEl.classList.remove("is-typing");
+            typewriterEl.classList.add("is-done");
+          }
+        };
+        setTimeout(step, 260);
+      }
+    }
+
+    // Hero title scramble/decode. Starts pre-jumbled (random letters, same
+    // monospace positions — nothing reflows) so it reads as encrypted
+    // until the first hover decodes it, which gets a one-off flourish on
+    // top of the usual settle. Every hover after that just replays the
+    // normal decode (same scrambleOnHover used everywhere else).
+    const heroTitleEl = document.querySelector<HTMLElement>("#hero-title");
+    if (heroTitleEl && !reduceMotion.matches) {
+      const letters = Array.from(heroTitleEl.querySelectorAll<HTMLElement>(".hero-letter"));
+      jumbleLetters(letters);
+
+      let hasUnjumbled = false;
+      scrambleOnHover(heroTitleEl, letters, () => {
+        if (hasUnjumbled) return;
+        hasUnjumbled = true;
+        heroTitleEl.classList.add("hero-title--flourish");
+        heroTitleEl.addEventListener(
+          "animationend",
+          () => heroTitleEl.classList.remove("hero-title--flourish"),
+          { once: true },
+        );
+      });
+    }
+
+    // Small "boot sequence" echo of the hero title at the end of the bio:
+    // jumbled at rest, then auto-decodes once the moment it scrolls into
+    // view (a guaranteed payoff, not just a hover easter egg), and stays
+    // replayable on hover afterward.
+    const signoffEl = document.querySelector<HTMLElement>("#about-signoff");
+    if (signoffEl && !reduceMotion.matches) {
+      const signoffLetters = Array.from(
+        signoffEl.querySelectorAll<HTMLElement>(".about-signoff__letter"),
+      );
+      jumbleLetters(signoffLetters);
+      scrambleOnHover(signoffEl, signoffLetters, () => {
+        signoffEl.classList.add("is-decoded");
+      });
+
+      if ("IntersectionObserver" in window) {
+        const signoffObserver = new IntersectionObserver(
+          (entries, observer) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              observer.unobserve(entry.target);
+              setTimeout(() => {
+                decodeLetters(signoffLetters, () => signoffEl.classList.add("is-decoded"));
+              }, 500);
+            }
+          },
+          { threshold: 0.6 },
+        );
+        signoffObserver.observe(signoffEl);
+      }
+    }
+    };
+
+    document.addEventListener("astro:page-load", initSections);
+  </script>
+
+<style>
+  .experience-block-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+    color: var(--accent-light);
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-decoration: none;
+    text-transform: uppercase;
+  }
+
+  .experience-block-link span:first-child {
+    padding: 0.1rem 0.4rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 0.3rem;
+  }
+
+  .experience-block-link:hover,
+  .experience-block-link:focus-visible {
+    color: var(--text-heading);
+    outline: none;
+  }
+
+  :global(body) {
+    background:
+      radial-gradient(circle at 12% 12%, var(--glow-6), transparent 32rem),
+      radial-gradient(circle at 90% 8%, var(--glow-7), transparent 34rem),
+      radial-gradient(circle at 6% 32%, var(--glow-1), transparent 36rem),
+      radial-gradient(circle at 92% 52%, var(--glow-4), transparent 32rem),
+      radial-gradient(circle at 50% 78%, var(--glow-5), transparent 30rem),
+      var(--bg-1);
+  }
+
+  .home-section {
+    position: relative;
+    display: grid;
+    min-height: calc(100svh - 3rem);
+    overflow: hidden;
+    place-items: center;
+    scroll-margin-top: 0;
+    background: transparent;
+    color: var(--text-dim);
+    padding: clamp(4rem, 8vw, 6.5rem) 0 clamp(5.5rem, 10vw, 8rem);
+    transition: opacity 700ms ease;
+  }
+
+  .hero-backdrop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 0;
+    background: var(--bg-glitch);
+  }
+
+  .hero-fade-bottom {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      transparent 0%,
+      transparent 55%,
+      var(--hero-fade-color) 100%
+    );
+    z-index: 1;
+  }
+
+  .hero-content {
+    position: relative;
+    z-index: 1;
+    width: var(--site-column);
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .hero-action,
+  .scroll-cue {
+    font-family: Inconsolata, monospace;
+    font-weight: 700;
+    letter-spacing: 0.35em;
+    line-height: 1.3;
+    text-transform: uppercase;
+  }
+
+  .hero-typewriter {
+    display: inline-block;
+    min-height: 1.4em;
+    margin: 0;
+    color: var(--accent-light);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.95rem, 1.6vw, 1.15rem);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+  }
+
+  .hero-typewriter.is-typing::after,
+  .hero-typewriter.is-done::after {
+    content: "";
+    display: inline-block;
+    width: 0.55em;
+    height: 1em;
+    margin-left: 0.15em;
+    background: currentColor;
+    vertical-align: -0.15em;
+    animation: hero-caret-blink 1s steps(1) infinite;
+  }
+
+  @keyframes hero-caret-blink {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  .hero-title {
+    display: inline-block;
+    margin: clamp(1.6rem, 3.5vw, 2.4rem) 0 0;
+    background: var(--gradient-hero);
+    background-clip: text;
+    color: transparent;
+    font-family: Inconsolata, monospace;
+    font-size: clamp(5rem, 14vw, 9.2rem);
+    font-weight: 900;
+    letter-spacing: 0;
+    line-height: 0.95;
+    padding-bottom: 0.08em;
+    white-space: nowrap;
+  }
+
+  /* One-shot celebration when the title decodes for the first time. */
+  .hero-title--flourish {
+    animation: hero-title-flourish 650ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes hero-title-flourish {
+    0% {
+      filter: brightness(1) drop-shadow(0 0 0 transparent);
+      transform: scale(1);
+    }
+    35% {
+      filter: brightness(1.6) drop-shadow(0 0 20px var(--accent));
+      transform: scale(1.03);
+    }
+    100% {
+      filter: brightness(1) drop-shadow(0 0 0 transparent);
+      transform: scale(1);
+    }
+  }
+
+  .hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: clamp(0.9rem, 2vw, 1.4rem);
+    margin-top: clamp(2.4rem, 5vw, 3.4rem);
+  }
+
+  .hero-action {
+    display: inline-flex;
+    min-width: min(100%, 10.8rem);
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-6);
+    border-radius: 4px;
+    color: var(--text-hero-action);
+    font-size: clamp(0.78rem, 1.15vw, 0.98rem);
+    min-height: 3rem;
+    padding: 0.88rem 1.55rem;
+    text-decoration: none;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .hero-action:hover,
+  .hero-action:focus-visible {
+    color: var(--text-bright);
+    transform: translateY(-2px);
+  }
+
+  .hero-action:focus-visible,
+  .scroll-cue:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.35rem;
+  }
+
+  .hero-action-primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .hero-action-secondary {
+    background: var(--bg-glitch);
+  }
+
+  .hero-action-secondary:hover,
+  .hero-action-secondary:focus-visible {
+    border-color: var(--border-hero-hover);
+    background: var(--bg-hero-hover);
+  }
+
+  .scroll-cue {
+    position: absolute;
+    bottom: clamp(1.6rem, 4vw, 2.6rem);
+    left: 50%;
+    z-index: 1;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--text-cue);
+    font-size: clamp(0.72rem, 1vw, 0.9rem);
+    text-decoration: none;
+    transform: translateX(-50%);
+    transition: color 180ms ease;
+  }
+
+  .scroll-cue:hover,
+  .scroll-cue:focus-visible {
+    color: var(--text-cue-hover);
+  }
+
+  .content-section p {
+    width: var(--site-column);
+    margin: 0;
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.8vw, 1.25rem);
+    line-height: 1.7;
+  }
+
+  .about-section {
+    position: relative;
+    background: transparent;
+    color: var(--text-dim);
+    padding: clamp(4.5rem, 8vw, 6.8rem) 0 clamp(2rem, 3.6vw, 2.8rem);
+    scroll-margin-top: 4rem;
+    transition: opacity 700ms ease;
+  }
+
+  .about-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 18rem;
+    background: linear-gradient(to bottom, var(--bg-1), transparent);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .about-shell {
+    position: relative;
+    z-index: 1;
+    width: var(--site-column);
+    margin: 0 auto;
+  }
+
+  .about-kicker {
+    margin: 0;
+    color: var(--accent);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.9rem, 1.3vw, 1.12rem);
+    font-weight: 800;
+    letter-spacing: 0.35em;
+    line-height: 1.3;
+    text-transform: uppercase;
+  }
+
+  .about-content {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: clamp(2.2rem, 4.8vw, 4.4rem);
+    align-items: flex-start;
+    margin-top: clamp(2.2rem, 4vw, 3.2rem);
+  }
+
+  .about-aside {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1.2rem, 2.1vw, 1.8rem);
+    width: clamp(26rem, 42vw, 34rem);
+  }
+
+  .about-text {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1.2rem, 2.1vw, 1.8rem);
+  }
+
+  .about-title {
+    margin: clamp(1.2rem, 2.8vw, 2rem) 0 0;
+    color: var(--text-heading);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.3rem, 8vw, 5.7rem);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .about-socials {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    margin-top: clamp(1.2rem, 2.4vw, 1.7rem);
+  }
+
+  .about-social-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    padding: 0.58rem 1.05rem;
+    border: 1px solid var(--border-6);
+    border-radius: 999px;
+    background: var(--bg-glitch);
+    color: var(--text-lead);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.85rem, 1.1vw, 0.96rem);
+    font-weight: 700;
+    text-decoration: none;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .about-social-link:hover,
+  .about-social-link:focus-visible {
+    border-color: var(--accent);
+    background: var(--bg-hero-hover);
+    color: var(--text-bright);
+    transform: translateY(-2px);
+  }
+
+  .about-social-link:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.35rem;
+  }
+
+  .about-social-link__icon {
+    display: inline-flex;
+    color: var(--accent-light);
+  }
+
+  .about-social-link__icon svg {
+    width: 1.05em;
+    height: 1.05em;
+  }
+
+  .about-paragraph {
+    margin: 0;
+    max-width: 38rem;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.6vw, 1.24rem);
+    font-weight: 600;
+    line-height: 1.55;
+  }
+
+  .about-paragraph-lead {
+    color: var(--text-lead);
+  }
+
+  /* Animated "boot sequence" echo of the hero title, signing off the
+     bio. Starts jumbled like the hero and auto-decodes once scrolled
+     into view (same scramble machinery, see the script block below),
+     staying replayable on hover — a little full-circle callback to the
+     top of the page, with more presence than a quiet aside. */
+  .about-signoff {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    margin-top: 0.6rem;
+    font-family: Inconsolata, monospace;
+  }
+
+  .about-signoff__welcome {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: clamp(0.88rem, 1.25vw, 1rem);
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .about-signoff__line {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    margin: 0;
+  }
+
+  .about-signoff__prompt {
+    color: var(--text-dim);
+    font-size: clamp(1.1rem, 1.8vw, 1.35rem);
+    font-weight: 700;
+  }
+
+  .about-signoff__mark {
+    display: inline-flex;
+    background: var(--gradient-hero);
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    font-size: clamp(1.4rem, 2.6vw, 1.95rem);
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    filter: drop-shadow(0 0 0 transparent);
+    transition: filter 0.7s ease;
+  }
+
+  .about-signoff__mark.is-decoded {
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent-light) 55%, transparent));
+  }
+
+  .about-signoff__cursor {
+    display: inline-block;
+    width: 0.55em;
+    height: 1.3em;
+    background: var(--accent-light);
+    animation: hero-caret-blink 1s steps(1) infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .about-signoff__cursor {
+      animation: none;
+    }
+  }
+
+  .content-section {
+    display: grid;
+    min-height: 72svh;
+    place-items: center;
+    background: transparent;
+    color: var(--text-dim);
+    padding: clamp(3rem, 8vw, 6rem) 0;
+    scroll-margin-top: 4rem;
+    transition: opacity 700ms ease;
+  }
+
+  .research-section {
+    position: relative;
+    background: transparent;
+    color: var(--text-body);
+    padding: clamp(2.4rem, 4.2vw, 3.4rem) 0 clamp(2rem, 3.6vw, 2.8rem);
+    scroll-margin-top: 4rem;
+    transition: opacity 700ms ease;
+  }
+
+  .research-header,
+  .research-grid {
+    width: var(--site-column);
+    margin: 0 auto;
+  }
+
+  .section-kicker {
+    margin: 0;
+    color: var(--accent);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.9rem, 1.3vw, 1.12rem);
+    font-weight: 800;
+    letter-spacing: 0.35em;
+    line-height: 1.3;
+    text-transform: uppercase;
+  }
+
+  .research-header h2 {
+    margin: clamp(1.2rem, 2.8vw, 2rem) 0 0;
+    color: var(--text-title);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.3rem, 8vw, 5.7rem);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .research-header > p:last-child {
+    margin: clamp(1.1rem, 2vw, 1.5rem) 0 0;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.6vw, 1.24rem);
+    font-weight: 600;
+    line-height: 1.55;
+  }
+
+  .research-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: clamp(1rem, 2vw, 1.35rem);
+    margin-top: clamp(3rem, 6vw, 4.2rem);
+  }
+
+  .research-actions {
+    width: var(--site-column);
+    margin: clamp(1.6rem, 3vw, 2.2rem) auto 0;
+    display: flex;
+    justify-content: center;
+  }
+
+  .research-see-all {
+    border: 1px solid var(--border-5);
+    border-radius: 4px;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.95rem, 1.25vw, 1.02rem);
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    line-height: 1;
+    padding: 0.8rem 1.35rem;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition:
+      border-color 180ms ease,
+      color 180ms ease,
+      background-color 180ms ease;
+  }
+
+  .research-see-all:hover,
+  .research-see-all:focus-visible {
+    border-color: var(--accent);
+    background: var(--bg-card);
+    color: var(--accent-lighter);
+  }
+
+  .research-see-all:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.35rem;
+  }
+
+  .research-card {
+    position: relative;
+    display: flex;
+    min-height: 13.2rem;
+    flex-direction: column;
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: inherit;
+    padding: clamp(1.7rem, 3vw, 2.15rem);
+    text-decoration: none;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .research-card:hover,
+  .research-card:focus-visible {
+    border-color: var(--border-tag-hover);
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+  }
+
+  .research-card:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.35rem;
+  }
+
+  .research-card-label {
+    color: var(--accent-light);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1.55rem, 2.7vw, 2rem);
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    line-height: 1;
+  }
+
+  .research-card-title {
+    margin-top: 1.35rem;
+    color: var(--text-body);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.5vw, 1.2rem);
+    font-weight: 800;
+    line-height: 1.35;
+  }
+
+  .research-card-footer {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: auto;
+    padding-top: 1.35rem;
+  }
+
+  .research-card-date {
+    color: var(--text-period);
+    font-family: Inconsolata, monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+
+  .research-card-arrow {
+    margin-left: auto;
+    color: var(--accent);
+    font-family: Inconsolata, monospace;
+    font-size: 1.1rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .experience-section {
+    position: relative;
+    background: transparent;
+    color: var(--text-body);
+    padding: clamp(2.4rem, 4.2vw, 3.4rem) 0 clamp(2rem, 3.6vw, 2.8rem);
+    scroll-margin-top: 4rem;
+    transition: opacity 700ms ease;
+  }
+
+  .experience-shell {
+    width: var(--site-column);
+    margin: 0 auto;
+  }
+
+  .experience-header h2 {
+    margin: clamp(1.2rem, 2.8vw, 2rem) 0 0;
+    color: var(--text-title);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.3rem, 8vw, 5.7rem);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .experience-timeline {
+    position: relative;
+    display: grid;
+    gap: clamp(0.7rem, 1.4vw, 1rem);
+    margin-top: clamp(2.8rem, 5vw, 3.7rem);
+    padding-left: clamp(1.2rem, 2.1vw, 1.55rem);
+  }
+
+  .experience-timeline::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 1px;
+    background: var(--gradient-timeline);
+  }
+
+  .experience-item {
+    position: relative;
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    background: var(--bg-card);
+    padding: clamp(1.1rem, 1.9vw, 1.45rem);
+    opacity: 0;
+    transform: translateX(-3.2rem);
+    transition:
+      opacity 620ms ease,
+      transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .experience-item::before {
+    content: "";
+    position: absolute;
+    top: clamp(1.05rem, 2vw, 1.4rem);
+    left: calc(clamp(1.2rem, 2.1vw, 1.55rem) * -1 - 0.32rem);
+    width: 0.45rem;
+    aspect-ratio: 1;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 6px var(--shadow-dot-ring);
+  }
+
+  .experience-item.is-visible {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  .experience-period {
+    margin: 0;
+    color: var(--text-period);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.86rem, 1.1vw, 1rem);
+    font-weight: 800;
+    letter-spacing: 0.23em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .experience-role {
+    margin: 0.55rem 0 0;
+    color: var(--text-lead);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1.25rem, 2vw, 1.55rem);
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .experience-organization {
+    display: inline-block;
+    margin: 0.3rem 0 0;
+    color: var(--accent);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.55vw, 1.22rem);
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  .experience-organization--link {
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition:
+      color 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .experience-organization--link:hover,
+  .experience-organization--link:focus-visible {
+    color: var(--accent-light);
+    border-color: currentColor;
+  }
+
+  .experience-organization--link:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.3rem;
+  }
+
+  .experience-points {
+    display: grid;
+    gap: 0.4rem;
+    margin: 0.8rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .experience-points li {
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.95rem, 1.3vw, 1.08rem);
+    font-weight: 600;
+    line-height: 1.45;
+  }
+
+  .experience-points li::before {
+    content: ">";
+    color: var(--accent);
+    font-weight: 800;
+    margin-right: 0.55rem;
+  }
+
+  .sny-section {
+    position: relative;
+    min-height: 100svh;
+    background: transparent;
+    color: var(--text-body);
+    padding: clamp(2.4rem, 4.2vw, 3.4rem) 0 clamp(5rem, 9vw, 7rem);
+    scroll-margin-top: 4rem;
+    transition: opacity 700ms ease;
+  }
+
+  .sny-shell {
+    width: var(--site-column);
+    margin: 0 auto;
+  }
+
+  .sny-header {
+    text-align: center;
+    padding-bottom: clamp(2.2rem, 4.2vw, 3rem);
+    border-bottom: 1px solid var(--section-div);
+  }
+
+  .sny-header h2 {
+    margin: 0;
+    color: var(--accent-blue);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.1rem, 7.2vw, 5rem);
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    line-height: 0.98;
+  }
+
+  .sny-header p {
+    max-width: 34rem;
+    margin: clamp(1rem, 2vw, 1.4rem) auto 0;
+    color: var(--text-dim);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.4vw, 1.12rem);
+    font-weight: 700;
+    text-transform: capitalize;
+    line-height: 1.45;
+  }
+
+  .sny-award {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55em;
+    margin-top: clamp(1.2rem, 2.4vw, 1.6rem);
+    padding: 0.62rem 1.15rem;
+    border: 1px solid var(--border-6);
+    border-radius: 999px;
+    background: var(--bg-glitch);
+    color: var(--text-lead);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.8rem, 1.05vw, 0.92rem);
+    font-weight: 700;
+    text-decoration: none;
+    transition:
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease,
+      transform 180ms ease;
+  }
+
+  .sny-award:hover,
+  .sny-award:focus-visible {
+    border-color: var(--accent);
+    background: var(--bg-hero-hover);
+    color: var(--text-bright);
+    transform: translateY(-2px);
+  }
+
+  .sny-award:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 0.35rem;
+  }
+
+  .sny-award__icon {
+    display: inline-flex;
+    color: var(--accent-light);
+  }
+
+  .sny-award__icon svg {
+    width: 1.05em;
+    height: 1.05em;
+  }
+
+  .sny-award__arrow {
+    transition: transform 180ms ease;
+  }
+
+  .sny-award:hover .sny-award__arrow,
+  .sny-award:focus-visible .sny-award__arrow {
+    transform: translateX(3px);
+  }
+
+  /* Bento layout: the featured stat (success rate) takes a 2x2 block,
+     the other three fill the remaining cells at varied sizes. */
+  .sny-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-auto-rows: minmax(7.5rem, auto);
+    gap: clamp(0.75rem, 1.4vw, 1rem);
+    margin-top: clamp(1.8rem, 3.2vw, 2.4rem);
+  }
+
+  .sny-stat-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    background: var(--bg-card-alt);
+    padding: clamp(1.35rem, 2.3vw, 1.85rem) 1rem;
+    text-align: center;
+  }
+
+  .sny-stats .sny-stat-card:nth-child(2) {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .sny-stats .sny-stat-card:nth-child(3) {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  .sny-stats .sny-stat-card:nth-child(4) {
+    grid-column: 3 / 5;
+    grid-row: 2;
+  }
+
+  .sny-stat-card--featured {
+    grid-column: 1 / 3;
+    grid-row: 1 / 3;
+    border-color: var(--border-tag-hover);
+    background: linear-gradient(160deg, var(--bg-card-hover), var(--bg-card-alt));
+    box-shadow: var(--shadow-tag);
+  }
+
+  .sny-stat-value {
+    margin: 0;
+    color: var(--accent-blue);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(2.3rem, 4vw, 3rem);
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .sny-stat-card--featured .sny-stat-value {
+    color: var(--accent-light);
+    font-size: clamp(3.6rem, 7vw, 5.2rem);
+  }
+
+  .sny-stat-label {
+    margin: 0.9rem 0 0;
+    color: var(--text-dim);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.9rem, 1.1vw, 0.98rem);
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .sny-stat-card--featured .sny-stat-label {
+    font-size: clamp(1rem, 1.3vw, 1.1rem);
+  }
+
+  .sny-stat-detail {
+    margin: 0.6rem 0 0;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.85rem, 1.1vw, 0.95rem);
+    font-weight: 600;
+    line-height: 1.4;
+    max-width: 20rem;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .sny-services {
+    margin-top: clamp(2.3rem, 4.4vw, 3.4rem);
+  }
+
+  .sny-services h3 {
+    margin: clamp(1rem, 2.3vw, 1.5rem) 0 0;
+    color: var(--text-title);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.3rem, 8vw, 5.7rem);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .sny-services-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(0.85rem, 1.8vw, 1.2rem);
+    margin-top: clamp(1.3rem, 2.2vw, 1.7rem);
+  }
+
+  .sny-service-card {
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    background: var(--bg-card-alt);
+    padding: clamp(1.2rem, 2vw, 1.6rem);
+  }
+
+  .sny-service-icon {
+    display: inline-flex;
+    width: 1.55rem;
+    aspect-ratio: 1;
+    align-items: center;
+    color: var(--accent);
+  }
+
+  .sny-service-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .sny-service-card h4 {
+    margin: 0.95rem 0 0;
+    color: var(--text-lead);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.4vw, 1.16rem);
+    font-weight: 800;
+    line-height: 1.35;
+  }
+
+  .sny-service-card p {
+    margin: 0.8rem 0 0;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.96rem, 1.25vw, 1.06rem);
+    font-weight: 600;
+    line-height: 1.45;
+  }
+
+  .sny-team {
+    margin-top: clamp(2.8rem, 5vw, 3.8rem);
+  }
+
+  .sny-team h3 {
+    margin: clamp(1rem, 2.3vw, 1.5rem) 0 0;
+    color: var(--text-title);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(3.3rem, 8vw, 5.7rem);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .sny-founders-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(0.85rem, 1.8vw, 1.2rem);
+    margin-top: clamp(1.3rem, 2.2vw, 1.7rem);
+  }
+
+  .sny-founder-card {
+    border: 1px solid var(--border-2);
+    border-radius: 8px;
+    background: var(--bg-card-alt);
+    padding: clamp(1.2rem, 2vw, 1.6rem);
+  }
+
+  .sny-founder-card h4 {
+    margin: 0;
+    color: var(--accent-light);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1.25rem, 1.8vw, 1.62rem);
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .sny-founder-school {
+    margin: 0.62rem 0 0;
+    color: var(--text-lead);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(1rem, 1.4vw, 1.18rem);
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .sny-founder-card p {
+    margin: 0.8rem 0 0;
+    color: var(--text-sub);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.96rem, 1.25vw, 1.06rem);
+    font-weight: 600;
+    line-height: 1.45;
+  }
+
+  .sny-founder-linkedin {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    margin-top: 0.9rem;
+    color: var(--accent-light);
+    font-family: Inconsolata, monospace;
+    font-size: clamp(0.9rem, 1.15vw, 0.98rem);
+    font-weight: 700;
+    text-decoration: none;
+    transition: gap 0.2s ease, color 0.2s ease;
+  }
+
+  .sny-founder-linkedin:hover {
+    color: var(--accent-lighter);
+    gap: 0.55em;
+  }
+
+  @media (max-width: 760px) {
+    .about-kicker {
+      letter-spacing: 0.24em;
+    }
+
+    .about-content {
+      grid-template-columns: 1fr;
+      justify-items: start;
+      gap: clamp(1.2rem, 3vw, 1.7rem);
+      margin-top: 1.4rem;
+    }
+
+    .about-aside {
+      display: contents;
+    }
+
+    .about-text {
+      order: 3;
+      text-align: left;
+      gap: 1rem;
+    }
+
+    .about-title {
+      margin-top: 0.8rem;
+    }
+
+    .home-section {
+      min-height: calc(100svh - 7rem);
+      padding: 3rem 0 5.5rem;
+    }
+
+    .hero-action,
+    .scroll-cue {
+      letter-spacing: 0.22em;
+    }
+
+    .hero-title {
+      font-size: clamp(2.75rem, 12vw, 4.5rem);
+    }
+
+    .hero-actions {
+      align-items: center;
+      flex-direction: column;
+    }
+
+    .hero-action {
+      width: min(100%, 17rem);
+    }
+
+    .research-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .research-header h2 {
+      font-size: clamp(2.8rem, 14vw, 4.2rem);
+    }
+
+    .experience-header h2 {
+      font-size: clamp(2.8rem, 14vw, 4.2rem);
+    }
+
+    .experience-timeline {
+      padding-left: 0.95rem;
+      margin-top: 1.9rem;
+    }
+
+    .experience-item {
+      padding: 1.05rem;
+    }
+
+    .experience-item::before {
+      left: -0.25rem;
+      width: 0.4rem;
+      top: 1.08rem;
+    }
+
+    .sny-header h2,
+    .sny-services h3,
+    .sny-team h3 {
+      font-size: clamp(2.8rem, 14vw, 4.2rem);
+    }
+
+    .sny-stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-auto-rows: auto;
+    }
+
+    .sny-stats .sny-stat-card,
+    .sny-stats .sny-stat-card:nth-child(2),
+    .sny-stats .sny-stat-card:nth-child(3),
+    .sny-stats .sny-stat-card:nth-child(4) {
+      grid-column: auto;
+      grid-row: auto;
+    }
+
+    .sny-stat-card--featured {
+      grid-column: 1 / 3;
+    }
+
+    .sny-stat-card--featured .sny-stat-value {
+      font-size: clamp(2.8rem, 10vw, 3.6rem);
+    }
+
+    .sny-services-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .sny-founders-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .experience-item {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+
+    .hero-typewriter.is-done::after {
+      animation: none;
+    }
+
+    .hero-title--flourish {
+      animation: none;
+    }
+  }
+</style>

@@ -1,18 +1,35 @@
 ---
+import { ClientRouter } from "astro:transitions";
 import Footer from "../components/Footer.astro";
 import NavBar from "../components/NavBar.astro";
+import PixelWorld from "../components/PixelWorld.astro";
+import NeonWorld from "../components/NeonWorld.astro";
 import "../styles/global.css";
 
 interface Props {
   fullBleed?: boolean;
   showChrome?: boolean;
   title: string;
+  /** Summary shown in search results and link previews. */
+  description?: string;
+  /** Render the persistent chain/city world behind the page. */
+  world?: boolean;
+  /** Hub pages pin which world the visit uses (block pages follow it). */
+  worldMode?: "pixel" | "neon";
 }
 
-const { title, fullBleed = false, showChrome = true } = Astro.props;
+const {
+  title,
+  description = "Samuel Smith — Coinbase, University of Michigan, S&Y Scholars. Research, experience and projects, laid out as a neon crypto city.",
+  fullBleed = false,
+  showChrome = true,
+  world = false,
+  worldMode,
+} = Astro.props;
+const canonical = new URL(Astro.url.pathname, "https://smit3y.xyz");
 ---
 
-<html lang="en">
+<html lang="en" data-world-mode={worldMode}>
   <head>
     <meta charset="utf-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -20,9 +37,34 @@ const { title, fullBleed = false, showChrome = true } = Astro.props;
     <meta name="viewport" content="width=device-width" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta name="theme-color" content="#07061a" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="smit3y.xyz" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary" />
+    <ClientRouter />
     <script is:inline>
+      // Theme + palette live on <html>. Client-side navigation swaps <html>'s
+      // attributes for the new page's, so re-apply them after every swap.
       (function () {
+        function apply() {
         var html = document.documentElement;
+        // which world (pixel city, neon harbor): a hub page pins it,
+        // every other page follows whatever hub you came from
+        var wm = html.getAttribute("data-world-mode");
+        try {
+          if (wm) localStorage.setItem("smit3y-world", wm);
+          else {
+            var saved = localStorage.getItem("smit3y-world");
+            html.setAttribute("data-world-mode", saved === "pixel" ? "pixel" : "neon");
+          }
+        } catch (e) {
+          if (!wm) html.setAttribute("data-world-mode", "neon");
+        }
         var t = localStorage.getItem("theme");
         if (t === "light") html.setAttribute("data-theme", "light");
         else if (t !== "dark" && window.matchMedia("(prefers-color-scheme: light)").matches) {
@@ -43,14 +85,19 @@ const { title, fullBleed = false, showChrome = true } = Astro.props;
             }
           } catch (e) {}
         }
+        }
+        apply();
+        document.addEventListener("astro:after-swap", apply);
       })();
     </script>
   </head>
   <body class="flex min-h-screen flex-col">
-    <div class="blueprint-grid" aria-hidden="true"></div>
-    <div class="scroll-progress" aria-hidden="true"></div>
-    <div class="grain-overlay" aria-hidden="true"></div>
-    <canvas class="cursor-trail" aria-hidden="true"></canvas>
+    <div class="blueprint-grid" aria-hidden="true" transition:persist="blueprint"></div>
+    <div class="scroll-progress" aria-hidden="true" transition:persist="scroll-progress"></div>
+    <div class="grain-overlay" aria-hidden="true" transition:persist="grain"></div>
+    <canvas class="cursor-trail" aria-hidden="true" transition:persist="cursor-trail"></canvas>
+    {world && <PixelWorld />}
+    {world && <NeonWorld />}
     {showChrome && <NavBar />}
     <main
       class={fullBleed

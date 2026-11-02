@@ -1,5 +1,5 @@
 ---
-import BaseLayout from "../../../layouts/BaseLayout.astro";
+import BlockPage from "../../../layouts/BlockPage.astro";
 import {
   RESEARCH_PAGE_SIZE,
   getResearchPage,
@@ -41,7 +41,7 @@ const { pageEntries, currentPage, totalPages } = Astro.props as PageProps;
 const pageNumbers = Array.from({ length: totalPages }, (_, idx) => idx + 1);
 ---
 
-<BaseLayout title={`Research | Page ${currentPage} | smit3y.xyz`} fullBleed={true}>
+<BlockPage index={2} title={`Research | Page ${currentPage} | smit3y.xyz`}>
   <section class="research-list-page">
     <header class="research-list-header">
       <p class="section-kicker">// RESEARCH</p>
@@ -118,7 +118,7 @@ const pageNumbers = Array.from({ length: totalPages }, (_, idx) => idx + 1);
       }
     </nav>
   </section>
-</BaseLayout>
+</BlockPage>
 
 <style>
   :global(body) {

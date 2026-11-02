@@ -1,0 +1,364 @@
+---
+// The homepage overlay for the 2D cities: the original hero, one label per
+// building (real links, positioned by the world each frame), and a live
+// status strip. The city itself is the persistent world behind it.
+import { BLOCKS } from "../lib/chain";
+import CityHero from "./CityHero.astro";
+
+interface Props {
+  mode: "pixel" | "neon";
+}
+const { mode } = Astro.props;
+---
+
+{mode === "pixel" && <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap" />}
+
+<section class:list={["cityhub", `is-${mode}`]} data-world="hub" data-city-hub={mode} aria-label="smit3y.xyz — pick a building">
+  <div class="cityhub-copy" data-city-copy>
+    <CityHero cue={mode === "pixel" ? "Pick a building ↓" : "Pick a building ↘"} />
+  </div>
+
+  <nav class="cityhub-tags" aria-label="Buildings">
+    {
+      BLOCKS.map((b, i) => (
+        <a class="ctag" href={b.href} data-city-tag={i}>
+          <span class="ctag-row">
+            <span class="ctag-n">#{i}</span>
+            <span class="ctag-l">{b.label}</span>
+          </span>
+          <span class="ctag-d">
+            <strong>{b.title}</strong>
+            <span>{b.tx[0]}</span>
+            <em>Step inside →</em>
+          </span>
+        </a>
+      ))
+    }
+  </nav>
+
+  <p class="cityhub-status" aria-hidden="true">
+    <span>Ann Arbor <b data-city-stat="clock">--:--</b></span>
+    <span>ETH <b data-city-stat="block">—</b></span>
+    <span>BTC <b data-city-stat="btc">—</b></span>
+    <span>Explored <b data-city-stat="explored">0/{BLOCKS.length}</b></span>
+  </p>
+  <p class="cityhub-hint" data-city-hint aria-hidden="true">swipe to explore the city ↔</p>
+</section>
+
+<style>
+  .cityhub {
+    position: relative;
+    height: calc(100svh - var(--chrome-h, 5.6rem));
+    min-height: 30rem;
+    /* the hero's soft glow may bleed past the screen edge; never let it widen the page */
+    overflow-x: clip;
+    pointer-events: none;
+  }
+
+  .cityhub a,
+  .cityhub button {
+    pointer-events: auto;
+  }
+
+  .cityhub-copy {
+    position: absolute;
+    top: clamp(1.25rem, 4vh, 2.75rem);
+    left: var(--copy-left, max(clamp(1.25rem, 4vw, 3.5rem), env(safe-area-inset-left, 0px)));
+    z-index: 3;
+    max-width: calc(100% - 32px);
+  }
+
+  .cityhub-copy::before {
+    position: absolute;
+    inset: -3rem -5rem -2.5rem -5rem;
+    z-index: -1;
+    background: radial-gradient(ellipse at 40% 45%, color-mix(in srgb, var(--bg-1) 70%, transparent) 25%, transparent 70%);
+    content: "";
+    pointer-events: none;
+  }
+
+  .is-pixel .cityhub-copy::before {
+    opacity: 0.55;
+  }
+
+  /* the pixel city leaves less sky, so its hero runs a size smaller */
+  .is-pixel :global(.ch-title) {
+    font-size: clamp(2.3rem, 4.4vw, 3.9rem);
+  }
+
+  .is-pixel :global(.ch-sub) {
+    font-size: 0.95rem;
+  }
+
+  /* ── building labels ── */
+  .ctag {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 4;
+    display: grid;
+    color: inherit;
+    text-decoration: none;
+    opacity: 0;
+    transform: translate(-50%, -100%);
+    transition: opacity 300ms ease;
+  }
+
+  .ctag.is-placed {
+    opacity: 1;
+  }
+
+  .ctag.is-on,
+  .ctag:focus-visible {
+    z-index: 5;
+  }
+
+  .ctag-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .ctag-d {
+    display: none;
+  }
+
+  .ctag.is-on .ctag-d,
+  .ctag:focus-visible .ctag-d {
+    display: grid;
+  }
+
+  /* pixel: boxy signboards with a pointer */
+  .is-pixel .ctag {
+    padding: 4px 8px 5px;
+    border: 2px solid var(--text-heading);
+    background: var(--bg-0);
+    box-shadow: 0 0 0 1px var(--bg-0), 3px 3px 0 0 color-mix(in srgb, var(--accent) 75%, transparent);
+    color: var(--text-heading);
+    font: 400 11px/1 Silkscreen, Inconsolata, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transform: translate(-50%, calc(-100% - 6px));
+    transition: opacity 300ms ease, transform 160ms steps(3), border-color 160ms steps(2), box-shadow 160ms steps(2);
+  }
+
+  .is-pixel .ctag::after {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    border: 5px solid transparent;
+    border-top-color: var(--text-heading);
+    content: "";
+    transform: translateX(-50%);
+  }
+
+  .is-pixel .ctag-n {
+    color: var(--accent-light);
+  }
+
+  .is-pixel .ctag.is-on,
+  .is-pixel .ctag:focus-visible {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 1px var(--bg-0), 3px 3px 0 0 var(--accent), 0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+    transform: translate(-50%, calc(-100% - 10px));
+  }
+
+  .is-pixel .ctag.is-on::after,
+  .is-pixel .ctag:focus-visible::after {
+    border-top-color: var(--accent);
+  }
+
+  .is-pixel .ctag-d {
+    gap: 4px;
+    max-width: 15rem;
+    margin-top: 6px;
+    color: var(--accent-light);
+    font: 600 12px/1.3 Inconsolata, monospace;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    white-space: normal;
+  }
+
+  .is-pixel .ctag-d strong {
+    color: var(--text-heading);
+    font-size: 13px;
+  }
+
+  .is-pixel .ctag-d span {
+    color: var(--text-sub);
+  }
+
+  .is-pixel .ctag-d em {
+    color: var(--accent-light);
+    font-style: normal;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  /* neon: glowing pills */
+  .is-neon .ctag {
+    padding: 0.35rem 0.7rem 0.4rem;
+    border: 1px solid color-mix(in srgb, var(--c, #8b5cf6) 70%, transparent);
+    border-radius: 999px;
+    background: rgba(6, 6, 24, 0.82);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--c, #8b5cf6) 35%, transparent);
+    color: #f3f0ff;
+    font: 700 0.78rem/1.1 Inconsolata, monospace;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    transform: translate(-50%, calc(-100% - 12px));
+    transition: opacity 300ms ease, border-radius 160ms ease, box-shadow 160ms ease;
+  }
+
+  /* tags beside the hero hang from the pill and open down over the city */
+  .is-neon .ctag.ctag--east {
+    transform: translate(-1.4rem, calc(-1.72rem - 12px));
+  }
+
+  .is-neon .ctag-n {
+    color: var(--c, #8b5cf6);
+  }
+
+  .is-neon .ctag.is-on,
+  .is-neon .ctag:focus-visible {
+    border-color: var(--c, #8b5cf6);
+    border-radius: 12px;
+    outline: none;
+    box-shadow: 0 0 30px color-mix(in srgb, var(--c, #8b5cf6) 60%, transparent);
+  }
+
+  .is-neon .ctag-d {
+    gap: 0.2rem;
+    max-width: 15rem;
+    margin-top: 0.4rem;
+    color: #b9b6d3;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: normal;
+  }
+
+  .is-neon .ctag-d strong {
+    color: #fff;
+    font-size: 0.9rem;
+  }
+
+  .is-neon .ctag-d em {
+    margin-top: 0.15rem;
+    color: var(--c, #8b5cf6);
+    font-style: normal;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* ── status strip ── */
+  .cityhub-status {
+    position: absolute;
+    right: max(16px, env(safe-area-inset-right, 0px));
+    bottom: 12px;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.35rem 1.1rem;
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    backdrop-filter: blur(6px);
+    color: var(--text-sub);
+    font: 700 0.72rem/1 Inconsolata, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    pointer-events: auto;
+  }
+
+  .is-pixel .cityhub-status {
+    border: 2px solid var(--border-6);
+    border-radius: 0;
+    font-family: Silkscreen, Inconsolata, monospace;
+    font-size: 9px;
+    font-weight: 400;
+  }
+
+  .cityhub-status b {
+    color: var(--text-heading);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cityhub-hint {
+    display: none;
+  }
+
+  @media (max-width: 760px) {
+    .cityhub-copy {
+      top: 1.25rem;
+      left: max(16px, env(safe-area-inset-left, 0px)) !important;
+    }
+
+    .cityhub-status {
+      right: auto;
+      left: max(12px, env(safe-area-inset-left, 0px));
+      justify-content: flex-start;
+    }
+
+    .cityhub-status span:nth-child(3) {
+      display: none;
+    }
+
+    /* the pixel skyline is tall on a phone: give the hero a backing */
+    .is-pixel .cityhub-copy {
+      right: max(16px, env(safe-area-inset-right, 0px));
+      padding: 0.75rem 0.9rem 0.9rem;
+      border: 2px solid var(--border-6);
+      background: color-mix(in srgb, var(--bg-0) 78%, transparent);
+      backdrop-filter: blur(4px);
+    }
+
+    .is-pixel .cityhub-copy::before {
+      display: none;
+    }
+
+    .is-pixel :global(.ch-title) {
+      font-size: 2.4rem;
+    }
+
+    .is-pixel :global(.ch-sub) {
+      font-size: 0.85rem;
+    }
+
+    .is-pixel :global(.ch-cue) {
+      display: none;
+    }
+
+    .is-pixel .cityhub-hint {
+      position: absolute;
+      bottom: 4.4rem;
+      left: 50%;
+      display: block;
+      margin: 0;
+      color: var(--text-sub);
+      font: 400 9px/1 Silkscreen, Inconsolata, monospace;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      transform: translateX(-50%);
+      transition: opacity 400ms ease;
+    }
+
+    .cityhub-hint.is-gone {
+      opacity: 0;
+    }
+
+    .ctag-l {
+      display: none;
+    }
+
+    .ctag.is-on .ctag-l {
+      display: inline;
+    }
+  }
+</style>

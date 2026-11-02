@@ -1,0 +1,2051 @@
+---
+// Neon Harbor — the persistent 2D world for the neon city. One canvas sits
+// fixed behind every page; the homepage shows the whole skyline, and each
+// block page flies the camera into that chapter's building. Kept alive
+// across client-side navigation (transition:persist), like the 3D world.
+import { BLOCKS } from "../lib/chain";
+---
+
+<div class="world nw" data-world-neon data-engine="neon" data-blocks={JSON.stringify(BLOCKS)} transition:persist="world-neon" aria-hidden="true">
+  <canvas class="nw-canvas"></canvas>
+</div>
+
+<style>
+  .nw {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: #05051a;
+    pointer-events: none;
+    view-transition-name: world-neon;
+  }
+
+  :global(:root[data-theme="light"]) .nw {
+    background: #6c8fe0;
+  }
+
+  .nw-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+</style>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+  import { prefetch } from "astro:prefetch";
+  import { VISITED_KEY } from "../lib/chain";
+
+  type Ctx = CanvasRenderingContext2D;
+  type Cam = { s: number; ax: number; ay: number };
+  interface BlockData { id: string; label: string; title: string; href: string }
+  const TAU = Math.PI * 2;
+  const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  const ease = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+
+  function rng(seed: number) {
+    return () => {
+      seed |= 0;
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rgba = (hex: string, a: number) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
+
+  // one landmark per block: x (fraction of width), height (fraction of the
+  // skyline), width (px at k = 1), neon colour
+  const MARKS = [
+    { x: 0.12, h: 0.34, w: 96, mw: 0.95, c: "#ff5aa8" }, // Genesis — home tower
+    { x: 0.285, h: 0.5, w: 112, mw: 0.9, c: "#4c8dff" }, // Coinbase — the exchange
+    { x: 0.445, h: 0.66, w: 106, mw: 0.9, c: "#17d4c8" }, // Research — observatory
+    { x: 0.6, h: 0.76, w: 98, mw: 0.9, c: "#ffcb05" }, // S&Y — academy spire
+    { x: 0.755, h: 0.38, w: 170, mw: 0.62, c: "#ffb02e" }, // Michigan WBB — arena
+    { x: 0.905, h: 0.84, w: 96, mw: 0.85, c: "#a78bfa" }, // Pending — under construction
+  ];
+  const ADS = ["HODL", "GM", "WAGMI", "SATS", "24/7", "DEX", "L2", "ETH"];
+
+  interface Pal {
+    light: boolean;
+    sky: string[]; sun: [string, string]; star: string; moon: string;
+    layers: string[]; body: string; bodyHi: string; win: string[]; winOff: string;
+    water: string; waterHi: string; quay: string; haze: string; ink: string;
+  }
+  function palette(): Pal {
+    const light = document.documentElement.getAttribute("data-theme") === "light";
+    if (light) {
+      return {
+        light,
+        sky: ["#5d84d8", "#a99be2", "#ffadb6", "#ffd7a3"], sun: ["#fff1b8", "#ff8a7a"], star: "#ffffff", moon: "#ffffff",
+        layers: ["#c9aedb", "#a08fc8", "#7570ad"], body: "#3f3c74", bodyHi: "#57539a", win: ["#ffe6a8", "#fff6dc"], winOff: "#34315f",
+        water: "#4e528f", waterHi: "#8b8fd2", quay: "#2c2a55", haze: "rgba(255,210,190,0.35)", ink: "#1d1a33",
+      };
+    }
+    return {
+      light,
+      sky: ["#02020f", "#0a0828", "#221146", "#4a1d5c"], sun: ["#ffd36b", "#ff3d8b"], star: "#f3f0ff", moon: "#fff4d6",
+      layers: ["#1a1240", "#130e33", "#0d0a26"], body: "#0b0a22", bodyHi: "#17153a", win: ["#ffcf73", "#a9d4ff"], winOff: "#100e2c",
+      water: "#04041a", waterHi: "#1b1650", quay: "#0e0c26", haze: "rgba(120,60,180,0.18)", ink: "#05051a",
+    };
+  }
+
+  // seasons: bats + pumpkins around Halloween, snow in winter
+  function season() {
+    const d = new Date();
+    const m = d.getMonth() + 1, day = d.getDate();
+    if ((m === 10 && day >= 20) || (m === 11 && day <= 2)) return "halloween";
+    if (m === 12 || m <= 2) return "winter";
+    return "";
+  }
+  // 0 = new moon, 0.5 = full
+  const moonPhase = () => (((Date.now() - 947182440000) / 86400000 / 29.530588853) % 1 + 1) % 1;
+
+  type BoatKind = "ferry" | "sail" | "ski" | "yacht" | "duck" | "pirate" | "tug" | "cargo" | "kayak" | "swan" | "dj" | "jetski" | "sub";
+  interface Boat { kind: BoatKind; speed: number; off: number; lane: number; L: number; sx: number; sy: number; sc: number; say: string; sayUntil: number }
+  interface BgSpark { x: number; y: number; px: number; py: number; vx: number; vy: number; born: number; life: number; c: string; drag: number; grav: number; trail: number; glitter: boolean; rocket?: { ty: number; type: string; c2: string } }
+  const BOAT_LEN: Record<BoatKind, number> = { ferry: 54, sail: 26, ski: 30, yacht: 58, duck: 26, pirate: 50, tug: 30, cargo: 80, kayak: 22, swan: 26, dj: 56, jetski: 14, sub: 10 };
+  const BOAT_SAY: Partial<Record<BoatKind, string>> = { duck: "quack", pirate: "arrr ₿", tug: "toot toot", dj: "WAGMI!", ski: "wheee", cargo: "HODLing", sub: "👀", swan: "honk" };
+
+  interface Spark { x: number; y: number; vx: number; vy: number; born: number; life: number; c: string; kind: "spark" | "rocket" | "cap" | "flash"; ty?: number }
+
+  class NeonCity {
+    root: HTMLElement;
+    cv: HTMLCanvasElement;
+    g: Ctx;
+    blocks: BlockData[];
+    pal = palette();
+    reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    season = season();
+
+    // layout (scene units = CSS px of the hub view)
+    W = 0; H = 0; dpr = 1; rdpr = 1; chromeH = 0; waterY = 0; skyTop = 0; k = 1; mobile = false;
+    sky = document.createElement("canvas");
+    sunC = document.createElement("canvas");
+    back: HTMLCanvasElement[] = [];
+    backPad = 60;
+    backExtra = 0;
+    front = document.createElement("canvas");
+    roofs: Array<{ x: number; y: number }> = [];
+    rects: Array<{ x0: number; x1: number; y0: number; y1: number }> = [];
+    darkWins: Array<Array<{ x: number; y: number; w: number; h: number }>> = [];
+    twinkle: Array<{ x: number; y: number; w: number; h: number; ph: number }> = [];
+    blinkers: Array<{ x: number; y: number; ph: number }> = [];
+    ads: Array<{ x: number; y: number; w: number; word: string; c: string; ph: number }> = [];
+    stars: Array<{ x: number; y: number; r: number; ph: number }> = [];
+    bridge = { x0: 0, x1: 0, deck: 0, towers: [0, 0] as number[] };
+    sunPos = { x: 0, y: 0, r: 0 };
+    mh: number[] = [];
+    copyRect: { right: number; bottom: number } | null = null;
+
+    // movers
+    drones: Array<{ y: number; speed: number; off: number; c: string }> = [];
+    boats: Boat[] = [];
+    bgFw: BgSpark[] = [];
+    nextBg = 0;
+    nextFinale = 0;
+    sparks: Spark[] = [];
+    flakes: Array<{ x: number; y: number; s: number; ph: number }> = [];
+    nextShoot = 0;
+    shooting: { x: number; y: number; born: number } | null = null;
+    nextAuto = 0;
+    nextLift = 0;
+    score = [64, 58];
+    lastShot = -1;
+
+    // state
+    state: "hub" | number = "hub";
+    cam: Cam = { s: 1, ax: 0, ay: 0 };
+    camAnim: { from: Cam; start: number; dur: number; ride?: { a: number; b: number } } | null = null;
+    // 0→1 progress of a tower-to-tower ride along the chain cable
+    rideU = -1;
+    hover = -1;
+    peek = -1;
+    peekEl: HTMLElement | null = null;
+    visited = new Set<string>();
+    tags: HTMLAnchorElement[] = [];
+    hubEl: HTMLElement | null = null;
+    tagSig = "";
+    par = { x: 0, y: 0, tx: 0, ty: 0 };
+    btc = "$80.7K";
+    anchorBlock = 26286454;
+    anchorTs = 1793133059;
+    clockStr = "";
+    clockHM = [10, 10];
+
+    raf = 0;
+    last = 0;
+    slow = 0;
+    abort = new AbortController();
+    pageAbort = new AbortController();
+    ro: ResizeObserver;
+    mo: MutationObserver;
+    timers: number[] = [];
+    lastSize = "";
+    sharpTimer = 0;
+
+    constructor(root: HTMLElement) {
+      this.root = root;
+      this.cv = root.querySelector("canvas")!;
+      this.g = this.cv.getContext("2d")!;
+      this.blocks = JSON.parse(root.dataset.blocks || "[]");
+      this.ro = new ResizeObserver(() => {
+        const size = `${root.clientWidth}x${root.clientHeight}`;
+        if (size === this.lastSize) return;
+        this.lastSize = size;
+        this.layout();
+      });
+      this.ro.observe(root);
+      this.mo = new MutationObserver(() => {
+        const p = palette();
+        if (p.light === this.pal.light) return;
+        this.pal = p;
+        this.layout();
+      });
+      this.mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      this.bind();
+      this.layout();
+      this.load();
+      this.tickClock();
+      this.timers.push(window.setInterval(() => this.tickClock(), 1000));
+      this.raf = requestAnimationFrame((t) => this.frame(t));
+    }
+
+    destroy() {
+      cancelAnimationFrame(this.raf);
+      this.abort.abort();
+      this.pageAbort.abort();
+      this.ro.disconnect();
+      this.mo.disconnect();
+      for (const t of this.timers) clearInterval(t);
+      this.peekEl?.remove();
+    }
+
+    // ── data ──────────────────────────────────────────────────────────
+    async load() {
+      try {
+        const res = await fetch("/api/ticker");
+        if (res.ok) {
+          const { data } = await res.json();
+          const b = Array.isArray(data) && data.find((d: any) => d.symbol === "BTC");
+          if (b) {
+            const n = parseFloat(String(b.price).replace(/[^0-9.]/g, ""));
+            this.btc = n > 1000 ? `$${(n / 1000).toFixed(1)}K` : String(b.price);
+          }
+          if (Array.isArray(data)) this.tickerText = data.slice(0, 8).map((d: any) => `${d.symbol} ${d.price} ${d.change}`).join("   ·   ");
+        }
+      } catch { /* fallback */ }
+      try {
+        const res = await fetch("https://ethereum-rpc.publicnode.com", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBlockByNumber", params: ["latest", false] }),
+        });
+        const json = await res.json();
+        const n = parseInt(json?.result?.number, 16), ts = parseInt(json?.result?.timestamp, 16);
+        if (n > this.anchorBlock && ts > this.anchorTs) { this.anchorBlock = n; this.anchorTs = ts; }
+      } catch { /* estimate */ }
+      this.tickClock();
+    }
+    tickerText = "BTC $80,679 +0.5%   ·   ETH $2,337 +0.1%   ·   SOL $101.46 +0.6%   ·   HYPE $80.45 +2.1%";
+
+    blockNow() {
+      return this.anchorBlock + Math.floor((Date.now() / 1000 - this.anchorTs) / 12);
+    }
+
+    tickClock() {
+      const d = new Date();
+      const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Detroit", hour: "numeric", minute: "2-digit", hour12: false }).formatToParts(d);
+      const hh = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24, mm = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+      this.clockHM = [hh, mm];
+      this.clockStr = new Intl.DateTimeFormat("en-US", { timeZone: "America/Detroit", hour: "numeric", minute: "2-digit" }).format(d);
+      const set = (k: string, v: string) => document.querySelectorAll(`[data-city-stat="${k}"]`).forEach((n) => (n.textContent = v));
+      set("clock", this.clockStr);
+      set("block", "#" + this.blockNow().toLocaleString("en-US"));
+      set("btc", this.btc);
+      set("explored", `${this.blocks.filter((b) => this.visited.has(b.id)).length}/${this.blocks.length}`);
+    }
+
+    readVisited() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(VISITED_KEY) || "[]");
+        this.visited = new Set(Array.isArray(raw) ? raw : []);
+      } catch {
+        this.visited = new Set();
+      }
+    }
+
+    // ── page wiring ───────────────────────────────────────────────────
+    pageState(): "hub" | number {
+      const v = document.querySelector<HTMLElement>("[data-world]")?.dataset.world ?? "hub";
+      if (v.startsWith("focus:")) {
+        const i = Number(v.slice(6));
+        if (this.blocks[i]) return i;
+      }
+      return "hub";
+    }
+
+    setPage() {
+      this.pageAbort.abort();
+      this.pageAbort = new AbortController();
+      const chrome = document.querySelector<HTMLElement>(".site-chrome");
+      const ch = chrome ? chrome.offsetHeight : 0;
+      document.documentElement.style.setProperty("--chrome-h", `${ch}px`);
+      if (Math.abs(ch - this.chromeH) > 2) this.layout();
+      const next = this.pageState();
+      this.readVisited();
+      this.tickClock();
+      if (next !== this.state) {
+        // tower to tower: ride the cable sideways instead of a crane shot
+        const ride = typeof this.state === "number" && typeof next === "number" ? { a: this.state, b: next } : undefined;
+        const dur = ride ? Math.min(1900, 1050 + 260 * Math.abs(ride.b - ride.a)) : next === "hub" ? 1000 : 1150;
+        this.camAnim = { from: { ...this.cam }, start: performance.now(), dur, ride };
+      }
+      const fresh = this.state === "hub" && next === "hub" && !this.hubEl;
+      this.state = next;
+      this.hover = -1;
+      this.setPeek(-1, 0, 0);
+      document.body.classList.remove("world-pointer");
+      this.hubEl = next === "hub" ? document.querySelector<HTMLElement>("[data-city-hub]") : null;
+      const copy = this.hubEl?.querySelector<HTMLElement>("[data-city-copy] .ch") ?? null;
+      if (copy) {
+        // the whole hero block, cue line included, so roofs and labels stay clear of it
+        const r = copy.getBoundingClientRect();
+        const cr = { right: r.right, bottom: r.bottom + window.scrollY };
+        const was = this.copyRect;
+        this.copyRect = cr;
+        if (!was || Math.abs(was.right - cr.right) > 4 || Math.abs(was.bottom - cr.bottom) > 4) this.buildFront();
+      }
+      this.tags = this.hubEl ? [...this.hubEl.querySelectorAll<HTMLAnchorElement>("[data-city-tag]")] : [];
+      this.tagSig = "";
+      const signal = this.pageAbort.signal;
+      this.tags.forEach((a, i) => {
+        a.style.setProperty("--c", MARKS[i].c);
+        a.addEventListener("pointerenter", () => this.setHover(i), { signal });
+        a.addEventListener("pointerleave", () => this.setHover(-1), { signal });
+        a.addEventListener("focus", () => this.setHover(i), { signal });
+        a.addEventListener("blur", () => this.setHover(-1), { signal });
+      });
+      // a full set of explored blocks earns a show over the harbor
+      let celebrated = true;
+      try { celebrated = !!sessionStorage.getItem("nw-celebrated"); } catch { /* ignore */ }
+      if (next === "hub" && this.visited.size >= this.blocks.length && !celebrated) {
+        try { sessionStorage.setItem("nw-celebrated", "1"); } catch { /* ignore */ }
+        for (let i = 0; i < 6; i++) setTimeout(() => this.firework(), 500 + i * 380);
+      }
+      void fresh;
+      this.sharpen();
+    }
+
+    bind() {
+      const signal = this.abort.signal;
+      const onUI = (t: EventTarget | null) => t instanceof Element && !!t.closest("a, button, input, [data-city-copy], .cityhub-status");
+      window.addEventListener("pointermove", (e) => {
+        if (e.pointerType !== "mouse" || this.camAnim) return;
+        if (typeof this.state === "number") {
+          this.setPeek(this.peekHit(e), e.clientX, e.clientY);
+          return;
+        }
+        this.par.tx = (e.clientX / this.W - 0.5) * 2;
+        this.par.ty = (e.clientY / this.H - 0.5) * 2;
+        if (onUI(e.target)) {
+          if (!(e.target instanceof Element && e.target.closest("[data-city-tag]"))) this.setHover(-1);
+          return;
+        }
+        this.setHover(this.hit(e.clientX, e.clientY));
+      }, { signal, passive: true });
+      document.documentElement.addEventListener("pointerleave", () => {
+        if (this.state === "hub") this.setHover(-1);
+        this.setPeek(-1, 0, 0);
+      }, { signal });
+      let preTap = -1;
+      window.addEventListener("pointerdown", (e) => {
+        preTap = e.pointerType === "mouse" ? -2 : this.hover;
+      }, { signal });
+      window.addEventListener("click", (e) => {
+        if (this.camAnim) return;
+        if (typeof this.state === "number") {
+          const i = this.peekHit(e);
+          if (i < 0) return;
+          this.setPeek(-1, 0, 0);
+          if (i === this.state) {
+            document.querySelector(".bp-body")?.scrollIntoView({ behavior: this.reduce ? "auto" : "smooth" });
+            return;
+          }
+          navigate(this.blocks[i].href);
+          return;
+        }
+        if (this.state !== "hub" || onUI(e.target) || !this.hubEl) return;
+        const i = this.hit(e.clientX, e.clientY);
+        if (i >= 0) {
+          // touch: the first tap shows the label, the second goes in
+          if (preTap !== -2 && preTap !== i) { this.setHover(i); return; }
+          navigate(this.blocks[i].href);
+          return;
+        }
+        this.setHover(-1);
+        // anywhere in the sky: a firework
+        const [sx, sy] = this.toScene(e.clientX, e.clientY);
+        // boats answer back when you tap them
+        const boat = [...this.boats].reverse().find((bt) => Math.abs(sx - bt.sx) < (bt.L * bt.sc) / 2 + 6 && sy > bt.sy - 26 * bt.sc && sy < bt.sy + 8);
+        if (boat) {
+          boat.say = BOAT_SAY[boat.kind] ?? "gm!";
+          boat.sayUntil = performance.now() / 1000 + 1.8;
+          return;
+        }
+        if (sy < this.waterY - 20) this.firework(sx, sy);
+      }, { signal });
+      // type "gm" anywhere (outside a text field) for a show over the city
+      let keys = "";
+      window.addEventListener("keydown", (e) => {
+        const tg = e.target as HTMLElement | null;
+        if (e.metaKey || e.ctrlKey || (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName)))) return;
+        keys = (keys + e.key.toLowerCase()).slice(-4);
+        if (keys.endsWith("gm")) {
+          keys = "";
+          for (let i = 0; i < 4; i++) setTimeout(() => this.firework(), i * 240);
+        }
+      }, { signal });
+      document.addEventListener("chain:gm", () => {
+        for (let i = 0; i < 5; i++) setTimeout(() => this.firework(), i * 260);
+      }, { signal });
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) { this.last = 0; }
+      }, { signal });
+    }
+
+    toScene(cx: number, cy: number) {
+      const { s, ax, ay } = this.cam;
+      return [(cx - ax) / s, (cy - ay) / s];
+    }
+
+    hit(cx: number, cy: number) {
+      const [x, y] = this.toScene(cx, cy);
+      return this.rects.findIndex((q) => x > q.x0 && x < q.x1 && y > q.y0 && y < q.y1);
+    }
+
+    peekHit(e: MouseEvent | PointerEvent) {
+      const head = document.querySelector<HTMLElement>(".bp-head");
+      if (!head || e.clientY > head.getBoundingClientRect().bottom) return -1;
+      if (e.target instanceof Element && e.target.closest("a, button, .bp-bar, .bp-meta")) return -1;
+      return this.hit(e.clientX, e.clientY);
+    }
+
+    setPeek(i: number, x: number, y: number) {
+      this.peek = typeof this.state === "number" && i !== this.state ? i : -1;
+      const here = typeof this.state === "number" && i === this.state;
+      document.body.classList.toggle("world-pointer", i >= 0);
+      if (i < 0) {
+        if (this.peekEl) this.peekEl.hidden = true;
+        return;
+      }
+      if (!this.peekEl || !this.peekEl.isConnected) {
+        this.peekEl = document.createElement("div");
+        this.peekEl.className = "world-peek";
+        document.body.appendChild(this.peekEl);
+      }
+      const b = this.blocks[i];
+      this.peekEl.textContent = here ? `#${i} · you're here · scroll ↓` : `#${i} ${b.label} →`;
+      this.peekEl.classList.toggle("is-here", here);
+      this.peekEl.hidden = false;
+      this.peekEl.style.left = x + 16 + "px";
+      this.peekEl.style.top = y + 18 + "px";
+      if (!here) prefetch(b.href);
+    }
+
+    setHover(i: number) {
+      if (i === this.hover) return;
+      this.hover = i;
+      this.tags.forEach((a, k) => a.classList.toggle("is-on", k === i));
+      document.body.classList.toggle("world-pointer", i >= 0);
+      if (i >= 0) prefetch(this.blocks[i].href);
+    }
+
+    // ── camera ────────────────────────────────────────────────────────
+    camTarget(): Cam {
+      if (this.state === "hub") return { s: 1, ax: 0, ay: -window.scrollY };
+      const q = this.rects[this.state];
+      if (!q) return { s: 1, ax: 0, ay: 0 };
+      const a = document.querySelector<HTMLElement>("[data-world-anchor]");
+      const r = a ? a.getBoundingClientRect() : { left: this.W * 0.52, top: this.H * 0.15, width: this.W * 0.42, height: this.H * 0.55 };
+      const bw = q.x1 - q.x0, bh = q.y1 - q.y0;
+      const s = clamp(Math.min((r.width * 0.78) / bw, (r.height * 0.92) / bh), 0.7, 2.6);
+      const bx = (q.x0 + q.x1) / 2, by = (q.y0 + q.y1) / 2;
+      return { s, ax: r.left + r.width / 2 - bx * s, ay: r.top + r.height * 0.5 - by * s };
+    }
+
+    // re-render the landmark layer at the camera's zoom once it settles,
+    // so close-ups stay crisp
+    sharpen() {
+      clearTimeout(this.sharpTimer);
+      this.sharpTimer = window.setTimeout(() => {
+        const s = this.state === "hub" ? 1 : this.camTarget().s;
+        let want = this.dpr * clamp(s, 1, 2.4);
+        const maxPx = 11e6;
+        want = Math.min(want, Math.sqrt(maxPx / Math.max(1, this.W * (this.waterY + 10))));
+        if (Math.abs(want - this.rdpr) / this.rdpr > 0.12) {
+          this.rdpr = want;
+          this.buildFront();
+        }
+      }, 1250);
+    }
+
+    // ── layout + prerender ────────────────────────────────────────────
+    layout() {
+      const w = this.root.clientWidth, h = this.root.clientHeight;
+      if (!w || !h) return;
+      const chrome = document.querySelector<HTMLElement>(".site-chrome");
+      this.chromeH = chrome ? chrome.offsetHeight : 0;
+      this.dpr = Math.min(this.slow > 2 ? 1 : 1.6, window.devicePixelRatio || 1);
+      this.rdpr = this.dpr;
+      this.W = w; this.H = h;
+      this.mobile = w < 760;
+      this.cv.width = Math.round(w * this.dpr);
+      this.cv.height = Math.round(h * this.dpr);
+      this.waterY = Math.round(h * (this.mobile ? 0.86 : 0.81));
+      this.skyTop = this.mobile ? h * 0.5 : this.chromeH + (h - this.chromeH) * 0.1;
+      this.k = this.mobile ? clamp(w / 640, 0.5, 0.72) : clamp(w / 1400, 0.62, 1.3);
+      this.backExtra = h * 0.6;
+      const r = rng(9);
+      this.stars = Array.from({ length: Math.round((w * h) / 4200) }, () => ({ x: r() * w, y: r() * h * 0.7, r: r() < 0.08 ? 1.6 : 0.9, ph: r() * TAU }));
+      this.drones = Array.from({ length: 5 }, (_, i) => ({ y: this.skyTop + (this.waterY - this.skyTop) * (0.05 + r() * 0.35), speed: (20 + r() * 34) * (i % 2 ? -1 : 1), off: r() * w, c: ["#ff5aa8", "#17d4c8", "#ffcb05", "#4c8dff", "#a78bfa"][i] }));
+      // the harbour fleet: far lanes first, so nearer boats draw on top
+      const fleet: BoatKind[] = ["cargo", "sail", "ferry", "pirate", "tug", "duck", "dj", "kayak", "swan", "yacht", "ski", "jetski", "sub"];
+      const lanes = fleet.length;
+      this.boats = fleet.map((kind, i) => {
+        const lane = (i * 5) % lanes / (lanes - 1);
+        const base = { cargo: 7, sail: 10, ferry: 13, pirate: 9, tug: 12, duck: 6, dj: 8, kayak: 9, swan: 7, yacht: 11, ski: 36, jetski: 44, sub: 5 }[kind];
+        return { kind, speed: base * (0.85 + r() * 0.3) * (i % 2 ? -1 : 1), off: r() * (w + 400), lane, L: BOAT_LEN[kind], sx: -999, sy: -999, sc: 1, say: "", sayUntil: 0 };
+      }).sort((a, b) => a.lane - b.lane);
+      this.flakes = this.season === "winter" ? Array.from({ length: 120 }, () => ({ x: r() * w, y: r() * h, s: 0.6 + r() * 1.6, ph: r() * TAU })) : [];
+      this.buildSky();
+      this.buildBack();
+      this.buildFront();
+      this.tagSig = "";
+      if (!this.camAnim) this.cam = this.camTarget();
+      this.sharpen();
+    }
+
+    mk(w: number, h: number, dpr = this.dpr) {
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(w * dpr));
+      c.height = Math.max(1, Math.round(h * dpr));
+      const g = c.getContext("2d")!;
+      g.scale(dpr, dpr);
+      return { c, g };
+    }
+
+    buildSky() {
+      const { W, H, pal } = this;
+      const { c, g } = this.mk(W, H);
+      const grd = g.createLinearGradient(0, 0, 0, this.waterY);
+      pal.sky.forEach((s, i) => grd.addColorStop(i / (pal.sky.length - 1), s));
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+      const hz = g.createLinearGradient(0, this.waterY - H * 0.3, 0, this.waterY);
+      hz.addColorStop(0, "rgba(0,0,0,0)");
+      hz.addColorStop(1, pal.haze);
+      g.fillStyle = hz;
+      g.fillRect(0, this.waterY - H * 0.3, W, H);
+      this.sky = c;
+
+      // the striped synth sun, as a sprite
+      const sr = Math.min(W, H) * (this.mobile ? 0.2 : 0.24);
+      this.sunPos = { x: W * 0.53, y: this.waterY - H * 0.14, r: sr };
+      const S = sr * 2.4;
+      const sp = this.mk(S * 2, S * 2);
+      const sg = sp.g;
+      const halo = sg.createRadialGradient(S, S, sr * 0.6, S, S, S);
+      halo.addColorStop(0, pal.light ? "rgba(255,200,150,0.55)" : "rgba(255,61,139,0.3)");
+      halo.addColorStop(1, "rgba(0,0,0,0)");
+      sg.fillStyle = halo;
+      sg.fillRect(0, 0, S * 2, S * 2);
+      sg.save();
+      sg.beginPath();
+      sg.arc(S, S, sr, 0, TAU);
+      sg.clip();
+      const lg = sg.createLinearGradient(0, S - sr, 0, S + sr);
+      lg.addColorStop(0, pal.sun[0]);
+      lg.addColorStop(1, pal.sun[1]);
+      sg.fillStyle = lg;
+      sg.fillRect(S - sr, S - sr, sr * 2, sr * 2);
+      sg.globalCompositeOperation = "destination-out";
+      for (let i = 0; i < 9; i++) sg.fillRect(S - sr, S + sr * 0.05 + i * sr * 0.11, sr * 2, 2 + i * 1.3);
+      sg.restore();
+      this.sunC = sp.c;
+    }
+
+    buildBack() {
+      const { W, pal, k, backPad: pad } = this;
+      const base = this.waterY;
+      this.back = pal.layers.map((col, li) => {
+        const { c, g } = this.mk(W + pad * 2, base + this.backExtra);
+        const r = rng(31 + li * 7);
+        const maxH = (base - this.skyTop) * [0.72, 0.54, 0.4][li];
+        g.fillStyle = col;
+        g.fillRect(0, base, W + pad * 2, this.backExtra);
+        let x = 0;
+        while (x < W + pad * 2) {
+          const w = (20 + r() * 46) * k * (1 + li * 0.15);
+          const h = maxH * (0.25 + r() * 0.75);
+          const top = base - h;
+          g.fillStyle = col;
+          g.beginPath();
+          const roof = r();
+          g.moveTo(x, base);
+          g.lineTo(x, top);
+          if (roof < 0.18) { g.lineTo(x + w / 2, top - w * 0.4); g.lineTo(x + w, top); }
+          else if (roof < 0.33) { g.lineTo(x + w * 0.3, top); g.lineTo(x + w * 0.3, top - 10); g.lineTo(x + w * 0.7, top - 10); g.lineTo(x + w * 0.7, top); g.lineTo(x + w, top); }
+          else if (roof < 0.43) { g.lineTo(x + w * 0.48, top); g.lineTo(x + w * 0.5, top - h * 0.25); g.lineTo(x + w * 0.52, top); g.lineTo(x + w, top); }
+          else if (roof < 0.52) g.arc(x + w / 2, top, w / 2, Math.PI, 0);
+          else g.lineTo(x + w, top);
+          g.lineTo(x + w, base);
+          g.closePath();
+          g.fill();
+          if (li < 2) {
+            const wc = li === 0 ? (pal.light ? "rgba(255,240,210,0.35)" : "rgba(169,180,255,0.16)") : pal.light ? "rgba(255,240,200,0.5)" : "rgba(255,207,115,0.3)";
+            g.fillStyle = wc;
+            for (let wy = top + 6; wy < base - 4; wy += 6)
+              for (let wx = x + 3; wx < x + w - 4; wx += 5) if (r() < 0.16) g.fillRect(wx, wy, 2, 2.5);
+          }
+          x += w + r() * 4;
+        }
+        // the harbour bridge sits in the middle layer
+        if (li === 1) this.drawBridge(g, pad);
+        return c;
+      });
+    }
+
+    drawBridge(g: Ctx, pad: number) {
+      const { W, k, pal } = this;
+      const deck = this.waterY - 26 * k;
+      const x0 = pad - 40, x1 = pad + W * (this.mobile ? 0.5 : 0.3);
+      const t1 = x0 + (x1 - x0) * 0.28, t2 = x0 + (x1 - x0) * 0.78;
+      const th = 120 * k;
+      this.bridge = { x0: x0 - pad, x1: x1 - pad, deck, towers: [t1 - pad, t2 - pad] };
+      const steel = pal.light ? "#6c63a8" : "#2a2060";
+      g.fillStyle = steel;
+      g.fillRect(x0, deck, x1 - x0, 5 * k);
+      for (const tx of [t1, t2]) {
+        g.fillRect(tx - 4 * k, deck - th, 3 * k, th + 30 * k);
+        g.fillRect(tx + 1 * k, deck - th, 3 * k, th + 30 * k);
+        g.fillRect(tx - 4 * k, deck - th, 8 * k, 3 * k);
+        g.fillRect(tx - 4 * k, deck - th * 0.55, 8 * k, 2 * k);
+      }
+      // main cable + hangers, lit
+      g.strokeStyle = pal.light ? "rgba(255,255,255,0.75)" : "rgba(160,190,255,0.55)";
+      g.lineWidth = 1.2;
+      const cable = (ax: number, bx: number, sagTo: number) => {
+        g.beginPath();
+        g.moveTo(ax, deck - th);
+        g.quadraticCurveTo((ax + bx) / 2, sagTo, bx, deck - th);
+        g.stroke();
+      };
+      cable(t1, t2, deck + th * 0.75);
+      g.beginPath(); g.moveTo(x0, deck - 4); g.quadraticCurveTo((x0 + t1) / 2, deck - th * 0.25, t1, deck - th); g.stroke();
+      g.beginPath(); g.moveTo(t2, deck - th); g.quadraticCurveTo((t2 + x1) / 2, deck - th * 0.25, x1, deck - 4); g.stroke();
+      g.lineWidth = 0.6;
+      for (let x = t1 + 8; x < t2; x += 9 * k) {
+        const u = (x - t1) / (t2 - t1);
+        const cy = (1 - u) * (1 - u) * (deck - th) + 2 * (1 - u) * u * (deck + th * 0.75) + u * u * (deck - th);
+        g.beginPath(); g.moveTo(x, cy); g.lineTo(x, deck); g.stroke();
+      }
+      g.fillStyle = pal.light ? "#fff6dc" : "#ffd98a";
+      for (let x = x0; x < x1; x += 14 * k) g.fillRect(x, deck - 1, 1.5, 1.5);
+    }
+
+    buildFront() {
+      const { W, waterY: base, k, pal } = this;
+      const { c, g } = this.mk(W, base + 10, this.rdpr);
+      this.front = c;
+      this.roofs = [];
+      this.rects = [];
+      this.darkWins = [];
+      this.twinkle = [];
+      this.blinkers = [];
+      this.ads = [];
+      const skyH = base - this.skyTop;
+      const r = rng(5);
+
+      // quay along the waterline
+      g.fillStyle = pal.quay;
+      g.fillRect(0, base - 7, W, 7);
+      g.fillStyle = pal.light ? "rgba(255,255,255,0.25)" : "rgba(160,150,255,0.18)";
+      g.fillRect(0, base - 7, W, 1);
+
+      const markW = (m: (typeof MARKS)[number]) => m.w * k * (this.mobile ? m.mw : 1);
+      // filler towers between landmarks
+      const fillers: Array<{ x: number; w: number; h: number }> = [];
+      for (let i = 0; i < (this.mobile ? 18 : 34); i++) {
+        const x = r() * W;
+        const w = (18 + r() * 34) * k, h = skyH * (0.12 + r() * 0.32);
+        if (MARKS.some((m) => Math.abs(m.x * W - x) < markW(m) / 2 + w / 2 + 2)) continue;
+        if (fillers.some((f) => Math.abs(f.x - x) < (f.w + w) / 2 - 6)) continue;
+        fillers.push({ x, w, h });
+      }
+      fillers.sort((a, b) => b.h - a.h);
+      for (const f of fillers) {
+        const x = f.x - f.w / 2, top = base - f.h;
+        const glass = r() < 0.35;
+        const gr = g.createLinearGradient(x, 0, x + f.w, 0);
+        gr.addColorStop(0, pal.bodyHi);
+        gr.addColorStop(1, glass ? (pal.light ? "#46427e" : "#0e0d2a") : pal.body);
+        g.fillStyle = gr;
+        g.fillRect(x, top, f.w, f.h);
+        // roof furniture
+        const roof = r();
+        if (roof < 0.25) {
+          g.fillStyle = pal.bodyHi;
+          g.fillRect(f.x - 0.5, top - 16 * k, 1.5, 16 * k);
+          this.blinkers.push({ x: f.x, y: top - 16 * k, ph: r() * TAU });
+        } else if (roof < 0.45) {
+          g.fillStyle = pal.bodyHi;
+          g.fillRect(x + f.w * 0.2, top - 8 * k, f.w * 0.3, 8 * k);
+          g.fillRect(x + f.w * 0.24, top - 11 * k, f.w * 0.22, 3 * k);
+        } else if (roof < 0.6 && f.w > 26 * k) {
+          // rooftop billboard
+          const bw = f.w * 0.85, bh = 12 * k;
+          const word = ADS[this.ads.length % ADS.length];
+          this.ads.push({ x: f.x - bw / 2, y: top - bh - 5 * k, w: bw, word, c: ["#ff5aa8", "#17d4c8", "#ffcb05", "#4c8dff", "#a78bfa"][this.ads.length % 5], ph: r() * TAU });
+          g.fillStyle = pal.bodyHi;
+          g.fillRect(f.x - bw * 0.3, top - 5 * k, 1.5, 5 * k);
+          g.fillRect(f.x + bw * 0.3, top - 5 * k, 1.5, 5 * k);
+        }
+        // windows
+        for (let wy = top + 6; wy < base - 10; wy += glass ? 5 : 7)
+          for (let wx = x + 3; wx < x + f.w - 4; wx += glass ? 4 : 6) {
+            const lit = r() < (glass ? 0.3 : 0.42);
+            if (!lit) continue;
+            g.fillStyle = pal.win[r() < 0.78 ? 0 : 1];
+            g.globalAlpha = 0.45 + r() * 0.55;
+            g.fillRect(wx, wy, glass ? 2 : 3, glass ? 2 : 3.5);
+            g.globalAlpha = 1;
+            if (r() < 0.04) this.twinkle.push({ x: wx, y: wy, w: glass ? 2 : 3, h: glass ? 2 : 3.5, ph: r() * TAU });
+          }
+        if (glass) {
+          g.fillStyle = pal.light ? "rgba(255,255,255,0.12)" : "rgba(140,170,255,0.06)";
+          g.fillRect(x + 2, top, 2, f.h);
+        }
+      }
+
+      const neon = (path: () => void, col: string, wid = 2) => {
+        g.save();
+        g.shadowColor = col;
+        g.shadowBlur = 14;
+        g.strokeStyle = col;
+        g.lineWidth = wid;
+        g.lineJoin = "round";
+        g.beginPath();
+        path();
+        g.stroke();
+        g.shadowBlur = 0;
+        g.lineWidth = wid * 0.45;
+        g.strokeStyle = "rgba(255,255,255,0.85)";
+        g.stroke();
+        g.restore();
+      };
+      let dark: Array<{ x: number; y: number; w: number; h: number }> = [];
+      const winGrid = (x0: number, y0: number, x1: number, y1: number, sx: number, sy: number, p: number, tint?: string) => {
+        for (let y = y0; y < y1 - 3; y += sy)
+          for (let x = x0; x < x1 - 2; x += sx) {
+            const lit = r() < p;
+            const w = sx * 0.5, h = sy * 0.55;
+            g.fillStyle = lit ? tint ?? pal.win[r() < 0.75 ? 0 : 1] : pal.winOff;
+            g.fillRect(x, y, w, h);
+            if (!lit) dark.push({ x, y, w, h });
+            else if (r() < 0.05) this.twinkle.push({ x, y, w, h, ph: r() * TAU });
+          }
+      };
+      const body = (x: number, y: number, w: number, h: number) => {
+        const gr = g.createLinearGradient(x, 0, x + w, 0);
+        gr.addColorStop(0, pal.bodyHi);
+        gr.addColorStop(0.35, pal.body);
+        gr.addColorStop(1, pal.body);
+        g.fillStyle = gr;
+        g.fillRect(x, y, w, h);
+      };
+      const text = (s: string, x: number, y: number, size: number, col: string, glow = col) => {
+        g.save();
+        g.font = `900 ${Math.round(size)}px Inconsolata, monospace`;
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.shadowColor = glow;
+        g.shadowBlur = 12;
+        g.fillStyle = col;
+        g.fillText(s, x, y);
+        g.restore();
+      };
+
+      MARKS.forEach((m, i) => {
+        dark = [];
+        const cx = m.x * W, w = markW(m), x = cx - w / 2;
+        let h = skyH * m.h;
+        // keep roofs (and the labels above them) clear of the hero copy
+        const cr = this.copyRect;
+        if (cr && !this.mobile && x < cr.right + 28) {
+          const above = [30, 92 * k, 22, 20, 24, 30][i];
+          h = Math.min(h, Math.max(skyH * 0.34, base - (cr.bottom + 24 + above)));
+        }
+        this.mh[i] = h;
+        const top = base - h;
+        let roofY = top;
+        let topY = top;
+        switch (i) {
+          case 0: { // home: slim tower, balconies, rooftop garden + string lights
+            body(x, top, w, h);
+            winGrid(x + 8, top + 14, x + w - 6, base - 22, 10, 12, 0.55);
+            for (let y = top + 22; y < base - 22; y += 24) {
+              g.fillStyle = pal.bodyHi; g.fillRect(x - 4, y, w + 8, 3);
+              g.fillStyle = "rgba(255,255,255,0.15)"; for (let bx = x - 3; bx < x + w + 4; bx += 4) g.fillRect(bx, y - 5, 1, 5);
+            }
+            // ground-floor café
+            g.fillStyle = pal.ink; g.fillRect(x + 4, base - 20, w - 8, 13);
+            g.fillStyle = rgba("#ffcf73", 0.75); g.fillRect(x + 6, base - 18, w - 12, 9);
+            for (let a = 0; a < w - 8; a += 8) { g.fillStyle = a % 16 ? "#ff5aa8" : "#ffe1ef"; g.fillRect(x + 4 + a, base - 23, 8, 3); }
+            for (let t = 0; t < 4; t++) { g.fillStyle = "#1f6b4a"; g.beginPath(); g.arc(x + 12 + (t * (w - 24)) / 3, top - 5, 7 * k + 2, 0, TAU); g.fill(); }
+            g.fillStyle = "#5a3a22"; g.fillRect(x + 10, top - 2, w - 20, 2);
+            neon(() => { g.moveTo(x, base - 7); g.lineTo(x, top); g.lineTo(x + w, top); g.lineTo(x + w, base - 7); }, m.c);
+            text("GM", cx, top + h * 0.36, 20 * k + 4, "#ffd1ea", m.c);
+            roofY = top - 14;
+            topY = top - 14;
+            break;
+          }
+          case 1: { // exchange: stepped glass crown, ticker strip
+            const c1 = 30 * k, c2 = 12 * k;
+            body(x, top + c1, w, h - c1);
+            body(x + w * 0.12, top + c2, w * 0.76, c1 - c2 + 1);
+            body(x + w * 0.28, top, w * 0.44, c2 + 1);
+            winGrid(x + 6, top + c1 + 10, x + w - 12, base - 24, 8, 9, 0.5);
+            g.fillStyle = "rgba(76,141,255,0.12)";
+            g.fillRect(x, top + c1, w, h - c1);
+            // lobby
+            g.fillStyle = pal.ink; g.fillRect(x + 6, base - 24, w - 12, 17);
+            g.fillStyle = rgba("#9cc2ff", 0.55); g.fillRect(x + 8, base - 22, w - 16, 13);
+            for (let a = x + 8; a < x + w - 8; a += 9) { g.fillStyle = pal.ink; g.fillRect(a, base - 22, 1, 13); }
+            neon(() => {
+              g.moveTo(x, base - 7); g.lineTo(x, top + c1); g.lineTo(x + w * 0.12, top + c1); g.lineTo(x + w * 0.12, top + c2);
+              g.lineTo(x + w * 0.28, top + c2); g.lineTo(x + w * 0.28, top); g.lineTo(x + w * 0.72, top); g.lineTo(x + w * 0.72, top + c2);
+              g.lineTo(x + w * 0.88, top + c2); g.lineTo(x + w * 0.88, top + c1); g.lineTo(x + w, top + c1); g.lineTo(x + w, base - 7);
+            }, m.c);
+            // ticker strip slot (text animated)
+            g.fillStyle = "rgba(5,4,15,0.92)"; g.fillRect(x + w - 11, top + c1 + 6, 9, h - c1 - 34);
+            g.fillStyle = "rgba(5,4,15,0.92)"; g.fillRect(x + w * 0.18, top + c1 + 10 * k, w * 0.56, 15 * k);
+            text("EXCHANGE", cx, base - 30, 9 * k + 3, "#cfe0ff", m.c);
+            roofY = top - 38 * k;
+            topY = top - 52 * k;
+            break;
+          }
+          case 2: { // research: tower + observatory dome
+            const dw = w * 0.82, dr = dw / 2;
+            body(x, top + dr, w, h - dr);
+            winGrid(x + 7, top + dr + 12, x + w - 5, base - 20, 9, 11, 0.45, "#bff6f0");
+            g.fillStyle = pal.bodyHi;
+            g.beginPath(); g.arc(cx, top + dr, dr, Math.PI, 0); g.fill();
+            for (let a = 1; a < 6; a++) { g.strokeStyle = "rgba(23,212,200,0.18)"; g.lineWidth = 1; g.beginPath(); g.arc(cx, top + dr, dr * (a / 6), Math.PI, 0); g.stroke(); }
+            g.fillStyle = pal.body; g.fillRect(cx - 4 * k, top + 2, 8 * k, dr - 2);
+            // reading room with shelves at street level
+            g.fillStyle = pal.ink; g.fillRect(x + 5, base - 20, w - 10, 13);
+            for (let a = x + 7; a < x + w - 7; a += 3) { g.fillStyle = ["#c23b3b", "#2b5aa8", "#f6c445", "#3ddc84", "#c4b5fd"][Math.floor(a) % 5]; g.fillRect(a, base - 18, 2, 4); g.fillRect(a, base - 12, 2, 4); }
+            neon(() => { g.moveTo(x, base - 7); g.lineTo(x, top + dr); g.lineTo(cx - dr, top + dr); g.arc(cx, top + dr, dr, Math.PI, 0); g.lineTo(x + w, top + dr); g.lineTo(x + w, base - 7); }, m.c);
+            g.save(); g.translate(cx, top + dr * 0.7); g.rotate(-0.7); g.fillStyle = "#c9d2e6"; g.fillRect(-3 * k, -dr * 0.95, 7 * k, dr * 0.95); g.restore();
+            text("LIBRARY", cx, top + dr + 8 * k + 4, 8 * k + 3, "#c9fff9", m.c);
+            roofY = top - 4;
+            topY = top - 8;
+            break;
+          }
+          case 3: { // S&Y: academy with clock + spire
+            const sh = h * 0.3;
+            body(x, top + sh, w, h - sh);
+            body(cx - w * 0.22, top + sh * 0.35, w * 0.44, sh * 0.7);
+            g.fillStyle = pal.bodyHi;
+            g.beginPath(); g.moveTo(cx - w * 0.22, top + sh * 0.36); g.lineTo(cx, top); g.lineTo(cx + w * 0.22, top + sh * 0.36); g.fill();
+            winGrid(x + 7, top + sh + 26, x + w - 5, base - 22, 10, 13, 0.5);
+            for (let t = 0; t < 3; t++) {
+              const ax = x + w * (0.22 + t * 0.28);
+              g.fillStyle = pal.win[0]; g.globalAlpha = 0.85;
+              g.beginPath(); g.arc(ax, top + sh + 12, 5 * k + 1, Math.PI, 0); g.fill();
+              g.fillRect(ax - 5 * k - 1, top + sh + 12, 10 * k + 2, 10 * k);
+              g.globalAlpha = 1;
+            }
+            // clock face (hands are live)
+            g.fillStyle = "#fff6dc"; g.beginPath(); g.arc(cx, top + sh * 0.72, 9 * k + 1, 0, TAU); g.fill();
+            g.strokeStyle = "#2a2348"; g.lineWidth = 1; g.beginPath(); g.arc(cx, top + sh * 0.72, 9 * k + 1, 0, TAU); g.stroke();
+            // door + steps
+            g.fillStyle = pal.ink; g.beginPath(); g.arc(cx, base - 18, 7 * k + 1, Math.PI, 0); g.fill(); g.fillRect(cx - 7 * k - 1, base - 18, 14 * k + 2, 11);
+            g.fillStyle = rgba("#ffcf73", 0.6); g.fillRect(cx - 5 * k, base - 17, 10 * k, 9);
+            neon(() => { g.moveTo(x, base - 7); g.lineTo(x, top + sh); g.lineTo(cx - w * 0.22, top + sh); g.lineTo(cx - w * 0.22, top + sh * 0.36); g.lineTo(cx, top); g.lineTo(cx + w * 0.22, top + sh * 0.36); g.lineTo(cx + w * 0.22, top + sh); g.lineTo(x + w, top + sh); g.lineTo(x + w, base - 7); }, m.c);
+            text("S&Y", cx, top + sh + 30 * k + 2, 11 * k + 4, "#fff3b0", m.c);
+            roofY = top;
+            topY = top - 6;
+            break;
+          }
+          case 4: { // arena: curved roof, jumbotron, stands
+            const rh = h * 0.35;
+            body(x, top + rh, w, h - rh);
+            g.fillStyle = pal.bodyHi;
+            g.beginPath(); g.moveTo(x, top + rh); g.quadraticCurveTo(cx, top - rh * 0.6, x + w, top + rh); g.fill();
+            for (let t = 1; t < 8; t++) {
+              g.strokeStyle = "rgba(255,203,5,0.22)"; g.lineWidth = 1;
+              g.beginPath(); g.moveTo(x + (w * t) / 8, top + rh); g.lineTo(cx + (x + (w * t) / 8 - cx) * 0.4, top + rh * 0.12); g.stroke();
+            }
+            g.fillStyle = "#05040f"; g.fillRect(cx - w * 0.3, top + rh + 8 * k, w * 0.6, h * 0.36);
+            winGrid(x + 8, base - h * 0.24, x + w - 6, base - 22, 9, 8, 0.6, "#ffe08a");
+            g.fillStyle = "#ffcb05"; g.fillRect(x, top + rh, w, 3);
+            g.fillStyle = "#00274c"; g.fillRect(x, top + rh + 3, w, 2);
+            // entrances
+            for (let d = 0; d < 4; d++) { const dx = x + w * (0.18 + d * 0.21); g.fillStyle = pal.ink; g.fillRect(dx, base - 19, 12 * k, 12); g.fillStyle = rgba("#ffe08a", 0.6); g.fillRect(dx + 1, base - 18, 12 * k - 2, 10); }
+            // floodlight masts
+            for (const mx of [x - 6, x + w + 6]) { g.fillStyle = pal.bodyHi; g.fillRect(mx - 1, top - 6, 2, base - top - 2); g.fillStyle = "#fff7d6"; g.fillRect(mx - 5, top - 9, 10, 3); }
+            neon(() => { g.moveTo(x, base - 7); g.lineTo(x, top + rh); g.quadraticCurveTo(cx, top - rh * 0.6, x + w, top + rh); g.lineTo(x + w, base - 7); }, m.c);
+            text("ARENA", cx, base - h * 0.29, 9 * k + 3, "#ffe7a0", m.c);
+            roofY = top + rh * 0.2;
+            topY = top - 12;
+            break;
+          }
+          case 5: { // pending: scaffold + crane, wireframe neon
+            const built = h * 0.4;
+            body(x, base - built, w, built);
+            winGrid(x + 7, base - built + 10, x + w - 5, base - 22, 10, 12, 0.3);
+            g.strokeStyle = "rgba(167,139,250,0.45)";
+            g.lineWidth = 1;
+            for (let y = base - built; y > top + 1; y -= 16 * k) {
+              g.strokeRect(x, y - 16 * k, w, 16 * k);
+              g.beginPath(); g.moveTo(x, y); g.lineTo(x + w, y - 16 * k); g.stroke();
+            }
+            g.save(); g.setLineDash([6, 5]);
+            neon(() => { g.moveTo(x, base - built); g.lineTo(x, top); g.lineTo(x + w, top); g.lineTo(x + w, base - built); }, m.c, 1.6);
+            g.restore();
+            neon(() => { g.moveTo(x, base - 7); g.lineTo(x, base - built); g.lineTo(x + w, base - built); g.lineTo(x + w, base - 7); }, m.c);
+            // site fence + sign
+            g.fillStyle = "#f6c445"; g.fillRect(x - 6, base - 20, w + 12, 13);
+            g.fillStyle = "#1b1f36"; g.fillRect(x - 5, base - 19, w + 10, 11);
+            text("NEXT BLOCK", cx, base - 13.5, 7 * k + 3, "#f6c445");
+            // crane mast + jib
+            const mx = x + w + 12 * k;
+            g.fillStyle = "#ffcb05";
+            for (let y = base - 7; y > top - 30 * k; y -= 8 * k) {
+              g.fillRect(mx - 3 * k, y - 8 * k, 1.5, 8 * k); g.fillRect(mx + 3 * k, y - 8 * k, 1.5, 8 * k);
+              g.fillRect(mx - 3 * k, y - 4 * k, 6 * k + 1.5, 1);
+            }
+            g.fillRect(mx - 74 * k, top - 32 * k, 104 * k, 3);
+            g.fillRect(mx - 1, top - 44 * k, 2, 12 * k);
+            g.strokeStyle = "#ffcb05"; g.lineWidth = 0.8;
+            g.beginPath(); g.moveTo(mx, top - 44 * k); g.lineTo(mx - 70 * k, top - 31 * k); g.moveTo(mx, top - 44 * k); g.lineTo(mx + 28 * k, top - 31 * k); g.stroke();
+            g.fillStyle = "#5a5a6a"; g.fillRect(mx + 16 * k, top - 30 * k, 12 * k, 8 * k);
+            roofY = top;
+            topY = top - 46 * k;
+            break;
+          }
+        }
+        this.darkWins.push(dark);
+        this.roofs.push({ x: cx, y: roofY });
+        const extra = i === 5 ? 34 * k : i === 4 ? 10 : 6;
+        this.rects.push({ x0: x - extra, x1: x + w + extra, y0: topY - 6, y1: base });
+      });
+    }
+
+    // ── fireworks ─────────────────────────────────────────────────────
+    firework(x?: number, y?: number) {
+      const now = performance.now() / 1000;
+      const tx = x ?? this.W * (0.2 + Math.random() * 0.7);
+      const ty = y ?? this.skyTop + (this.waterY - this.skyTop) * (0.05 + Math.random() * 0.3);
+      const c = ["#ff5aa8", "#17d4c8", "#ffcb05", "#4c8dff", "#a78bfa", "#3ddc84"][Math.floor(Math.random() * 6)];
+      this.sparks.push({ kind: "rocket", x: tx, y: this.waterY - 8, vx: 0, vy: -(this.waterY - ty) / 0.9, born: now, life: 0.9, c, ty });
+    }
+
+    burstAt(x: number, y: number, c: string, now: number) {
+      const n = 46;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + Math.random() * 0.1;
+        const sp = 60 + Math.random() * 70;
+        this.sparks.push({ kind: "spark", x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, born: now, life: 1.3 + Math.random() * 0.6, c: Math.random() < 0.25 ? "#ffffff" : c });
+      }
+      this.sparks.push({ kind: "flash", x, y, vx: 0, vy: 0, born: now, life: 0.35, c });
+    }
+
+    // ── frame ─────────────────────────────────────────────────────────
+    frame(nowMs: number) {
+      this.raf = requestAnimationFrame((t) => this.frame(t));
+      if (document.hidden) return;
+      const dt = this.last ? Math.min(0.05, (nowMs - this.last) / 1000) : 0.016;
+      // adaptive quality: fall back to 1× pixels if frames run long
+      if (this.last && nowMs - this.last > 24) this.slow += 0.02; else this.slow = Math.max(0, this.slow - 0.005);
+      if (this.slow > 2 && this.dpr > 1) this.layout();
+      this.last = nowMs;
+      const t = this.reduce ? 4 : nowMs / 1000;
+
+      // camera
+      const target = this.camTarget();
+      if (this.camAnim) {
+        const u = clamp((nowMs - this.camAnim.start) / this.camAnim.dur, 0, 1);
+        const e = this.reduce ? 1 : ease(u);
+        const f = this.camAnim.from;
+        if (this.camAnim.ride) {
+          // pull back just enough to see the cable, glide along it, settle in
+          const s = (f.s + (target.s - f.s) * e) * (1 - 0.22 * Math.sin(u * Math.PI));
+          // interpolate the world point under the view centre so the glide stays level
+          const cx = this.W / 2, cy = this.H / 2;
+          const wx = (cx - f.ax) / f.s + ((cx - target.ax) / target.s - (cx - f.ax) / f.s) * e;
+          const wy = (cy - f.ay) / f.s + ((cy - target.ay) / target.s - (cy - f.ay) / f.s) * e;
+          this.cam = { s, ax: cx - wx * s, ay: cy - wy * s };
+          this.rideU = u;
+        } else {
+          // zoom through a slightly wider view on the way, like a crane shot
+          const lift = Math.sin(u * Math.PI) * 0.12 * Math.abs(target.s - f.s);
+          const s = f.s + (target.s - f.s) * e - lift;
+          this.cam = { s, ax: f.ax + (target.ax - f.ax) * e, ay: f.ay + (target.ay - f.ay) * e };
+        }
+        if (u >= 1) {
+          this.camAnim = null;
+          this.rideU = -1;
+        }
+      } else this.cam = target;
+      this.par.x += (this.par.tx - this.par.x) * 0.05;
+      this.par.y += (this.par.ty - this.par.y) * 0.05;
+
+      this.draw(t, dt);
+      if (this.state === "hub") this.placeTags();
+    }
+
+    T(g: Ctx, cam: Cam) {
+      g.setTransform(this.dpr * cam.s, 0, 0, this.dpr * cam.s, this.dpr * cam.ax, this.dpr * cam.ay);
+    }
+    lerpCam(f: number, px = 0, py = 0): Cam {
+      const c = this.cam;
+      return { s: 1 + (c.s - 1) * f, ax: c.ax * f + px, ay: c.ay * f + py };
+    }
+
+    draw(t: number, dt: number) {
+      const { g, W, H, dpr, pal, cam } = this;
+      const focus = typeof this.state === "number";
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = "source-over";
+      // sky in screen space, drifting slightly with the camera
+      const skyShift = clamp(cam.ay * 0.04, -40, 40);
+      g.drawImage(this.sky, 0, skyShift - 40, W, H + 80);
+      if (!pal.light) {
+        for (const s of this.stars) {
+          const a = 0.3 + 0.7 * Math.abs(Math.sin(t * 0.8 + s.ph));
+          g.globalAlpha = a;
+          g.fillStyle = pal.star;
+          const sx = (((s.x + cam.ax * 0.03 - this.par.x * 4) % W) + W) % W;
+          g.fillRect(sx, s.y + skyShift, s.r, s.r);
+        }
+        g.globalAlpha = 1;
+        this.drawAurora(g, t);
+        this.drawMoon(g);
+        this.drawShootingStar(g, t);
+      }
+
+      // sun + searchlights, gently parallaxed
+      const sc = this.lerpCam(0.35, -this.par.x * 6, -this.par.y * 3);
+      this.T(g, sc);
+      const S = this.sunPos.r * 2.4;
+      g.drawImage(this.sunC, this.sunPos.x - S, this.sunPos.y - S, S * 2, S * 2);
+      this.T(g, this.lerpCam(0.55));
+      for (const [fx, ph, col] of [[0.36, 0, "rgba(140,170,255,0.08)"], [0.82, 2, "rgba(255,120,200,0.07)"], [0.66, 4, "rgba(120,255,230,0.05)"]] as Array<[number, number, string]>) {
+        const ang = -Math.PI / 2 + Math.sin(t * 0.33 + ph) * 0.5;
+        const ox = fx * W, oy = this.waterY - 40;
+        g.save(); g.translate(ox, oy); g.rotate(ang);
+        const lg = g.createLinearGradient(0, 0, H, 0);
+        lg.addColorStop(0, col); lg.addColorStop(1, "rgba(0,0,0,0)");
+        g.fillStyle = lg; g.beginPath(); g.moveTo(0, 0); g.lineTo(H, -H * 0.06); g.lineTo(H, H * 0.06); g.fill();
+        g.restore();
+      }
+
+      // fireworks far off behind the skyline
+      this.T(g, this.lerpCam(0.45));
+      this.drawBgFireworks(g, t, dt);
+
+      // silhouettes (each layer zooms a little less than the one in front)
+      this.back.forEach((c, li) => {
+        const f = [0.5, 0.68, 0.84][li];
+        const pf = [6, 12, 20][li];
+        this.T(g, this.lerpCam(f, -this.par.x * pf * cam.s, -this.par.y * pf * 0.25));
+        g.drawImage(c, -this.backPad, 0, W + this.backPad * 2, this.waterY + this.backExtra);
+        if (li === 1) this.drawBridgeTraffic(g, t);
+      });
+
+      // the landmark layer + everything that lives in the city
+      this.T(g, cam);
+      this.drawSkyTraffic(g, t);
+      g.drawImage(this.front, 0, 0, W, this.waterY + 10);
+      this.drawWindows(g, t);
+      this.drawAds(g, t);
+      this.drawLandmarkFx(g, t);
+      this.drawChain(g, t);
+      this.drawSeason(g, t, dt);
+      this.drawTram(g, t);
+
+      // highlight the hovered / peeked / focused building
+      const hl = this.hover >= 0 ? this.hover : this.peek;
+      if (hl >= 0) this.glowRect(g, hl, 0.32);
+      if (focus) this.glowRect(g, this.state as number, 0.2);
+
+      // water, in screen space, mirroring what's above it
+      const wl = cam.ay + cam.s * this.waterY;
+      if (wl < H) {
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const top = Math.max(0, wl);
+        const wg = g.createLinearGradient(0, top, 0, H);
+        wg.addColorStop(0, pal.waterHi); wg.addColorStop(1, pal.water);
+        g.fillStyle = wg;
+        g.fillRect(0, top, W, H - top);
+        const wh = H - wl;
+        const step = 3;
+        for (let y = Math.max(0, -wl); y < wh; y += step) {
+          const src = wl - y * 1.3 - step;
+          if (src < 0) break;
+          const off = Math.sin(y * 0.2 + t * 2.2) * (1 + y * 0.05) * cam.s;
+          g.globalAlpha = 0.5 * (1 - y / wh);
+          g.drawImage(this.cv, 0, src * dpr, this.cv.width, step * dpr, off, wl + y, W, step);
+        }
+        g.globalAlpha = 1;
+        this.T(g, cam);
+        this.drawWater(g, t);
+      }
+      this.T(g, cam);
+      this.drawSparks(g, t, dt, false);
+
+      // a soft vignette around the focused building on block pages
+      if (focus) {
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const q = this.rects[this.state as number];
+        const cx = cam.ax + cam.s * (q.x0 + q.x1) / 2, cy = cam.ay + cam.s * (q.y0 + q.y1) / 2;
+        const rad = cam.s * Math.max(q.x1 - q.x0, q.y1 - q.y0);
+        const vg = g.createRadialGradient(cx, cy, rad * 0.55, cx, cy, rad * 1.9);
+        vg.addColorStop(0, "rgba(0,0,0,0)");
+        vg.addColorStop(1, pal.light ? "rgba(60,50,110,0.35)" : "rgba(3,3,14,0.55)");
+        g.fillStyle = vg;
+        g.fillRect(0, 0, W, H);
+      }
+      if (this.flakes.length) this.drawSnow(g, t, dt);
+    }
+
+    glowRect(g: Ctx, i: number, a: number) {
+      const q = this.rects[i], m = MARKS[i];
+      const gx = (q.x0 + q.x1) / 2;
+      const rg = g.createRadialGradient(gx, this.waterY, 0, gx, this.waterY, (q.y1 - q.y0) * 0.95);
+      rg.addColorStop(0, rgba(m.c, a));
+      rg.addColorStop(1, rgba(m.c, 0));
+      g.fillStyle = rg;
+      g.fillRect(q.x0 - 140, q.y0 - 80, q.x1 - q.x0 + 280, q.y1 - q.y0 + 80);
+      // every window on
+      g.fillStyle = rgba(this.pal.win[0], 0.85);
+      for (const w of this.darkWins[i] ?? []) g.fillRect(w.x, w.y, w.w, w.h);
+    }
+
+    drawAurora(g: Ctx, t: number) {
+      const { W, cam } = this;
+      g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      const base = this.skyTop * 0.6 + 30 + cam.ay * 0.03;
+      g.globalCompositeOperation = "lighter";
+      for (let band = 0; band < 2; band++) {
+        g.beginPath();
+        for (let x = 0; x <= W; x += 24) {
+          const y = base + band * 26 + Math.sin(x * 0.004 + t * 0.25 + band) * 22 + Math.sin(x * 0.011 - t * 0.4) * 8;
+          x ? g.lineTo(x, y) : g.moveTo(x, y);
+        }
+        g.strokeStyle = band ? "rgba(23,212,200,0.05)" : "rgba(167,139,250,0.06)";
+        g.lineWidth = 34;
+        g.stroke();
+      }
+      g.globalCompositeOperation = "source-over";
+    }
+
+    drawMoon(g: Ctx) {
+      const { W, cam } = this;
+      const x = W * (this.mobile ? 0.82 : 0.86) - cam.ax * 0.02, y = this.skyTop * 0.55 + 46 + cam.ay * 0.02, r = 13;
+      const ph = moonPhase();
+      const halo = g.createRadialGradient(x, y, r, x, y, r * 4);
+      halo.addColorStop(0, "rgba(255,244,214,0.12)"); halo.addColorStop(1, "rgba(255,244,214,0)");
+      g.fillStyle = halo; g.fillRect(x - r * 4, y - r * 4, r * 8, r * 8);
+      g.save();
+      g.beginPath(); g.arc(x, y, r, 0, TAU); g.clip();
+      g.fillStyle = this.pal.moon; g.fillRect(x - r, y - r, r * 2, r * 2);
+      g.fillStyle = "rgba(200,190,170,0.35)";
+      for (const [dx, dy, rr] of [[-4, -3, 3], [5, 4, 2.2], [-2, 6, 1.6], [3, -6, 1.4]]) { g.beginPath(); g.arc(x + dx, y + dy, rr, 0, TAU); g.fill(); }
+      // the dark side, set by today's real phase
+      const off = ph < 0.5 ? -4 * r * ph : 4 * r * (1 - ph);
+      g.fillStyle = "rgba(10,8,40,0.94)";
+      g.beginPath(); g.arc(x + off, y, r * 1.02, 0, TAU); g.fill();
+      g.restore();
+    }
+
+    drawShootingStar(g: Ctx, t: number) {
+      if (this.reduce) return;
+      if (!this.shooting && t > this.nextShoot) {
+        this.shooting = { x: Math.random() * this.W * 0.8, y: 20 + Math.random() * this.H * 0.25, born: t };
+        this.nextShoot = t + 6 + Math.random() * 10;
+      }
+      const s = this.shooting;
+      if (!s) return;
+      const age = t - s.born;
+      if (age > 0.9) { this.shooting = null; return; }
+      const hx = s.x + age * 260, hy = s.y + age * 90;
+      const lg = g.createLinearGradient(hx, hy, hx - 70, hy - 24);
+      lg.addColorStop(0, `rgba(255,255,255,${1 - age})`); lg.addColorStop(1, "rgba(255,255,255,0)");
+      g.strokeStyle = lg; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(hx, hy); g.lineTo(hx - 70, hy - 24); g.stroke();
+    }
+
+    drawBridgeTraffic(g: Ctx, t: number) {
+      const b = this.bridge;
+      const len = b.x1 - b.x0;
+      if (len <= 0) return;
+      for (let i = 0; i < 9; i++) {
+        const dir = i % 2 ? 1 : -1;
+        const u = (((t * (0.04 + (i % 3) * 0.012) * dir + i / 9) % 1) + 1) % 1;
+        const x = b.x0 + u * len;
+        g.fillStyle = dir > 0 ? "rgba(255,240,200,0.95)" : "rgba(255,90,95,0.9)";
+        g.fillRect(x, b.deck - 2.5 + (dir > 0 ? 0 : 1.5), 2, 1.2);
+      }
+      // tower beacons
+      if (Math.sin(t * 3) > 0) for (const tx of b.towers) { g.fillStyle = "#ff5a5f"; g.fillRect(tx - 1, b.deck - 122 * this.k, 2, 2); }
+    }
+
+    drawSkyTraffic(g: Ctx, t: number) {
+      const { W, pal, k } = this;
+      // drones / flying cars
+      for (const d of this.drones) {
+        const x = ((((d.off + t * d.speed) % (W + 80)) + W + 80) % (W + 80)) - 40;
+        const y = d.y + Math.sin(t * 1.3 + d.off) * 6;
+        g.fillStyle = pal.light ? "#3f3c74" : "#d9d6ff";
+        g.fillRect(x - 5, y - 1, 10, 2.5);
+        if (Math.sin(t * 6 + d.off) > 0) { g.fillStyle = d.c; g.beginPath(); g.arc(x + (d.speed > 0 ? 5 : -5), y, 1.8, 0, TAU); g.fill(); }
+        g.fillStyle = "rgba(255,240,200,0.4)";
+        g.fillRect(x + (d.speed > 0 ? 5 : -15), y, 10, 1);
+      }
+      // blimp with a scrolling banner
+      const bw = 90 * k + 30, bh = bw * 0.32;
+      const loop = W + bw * 3;
+      const bx = (((t * 9) % loop) + loop) % loop - bw * 1.5;
+      const by = this.skyTop + (this.waterY - this.skyTop) * 0.12 + Math.sin(t * 0.5) * 4;
+      g.fillStyle = pal.light ? "#e9e4ff" : "#2a2660";
+      g.beginPath(); g.ellipse(bx, by, bw / 2, bh / 2, 0, 0, TAU); g.fill();
+      g.fillStyle = pal.light ? "#cfc6f4" : "#1d1a48";
+      g.beginPath(); g.moveTo(bx - bw / 2 + 4, by); g.lineTo(bx - bw / 2 - 10, by - bh * 0.45); g.lineTo(bx - bw / 2 - 10, by + bh * 0.45); g.fill();
+      g.fillRect(bx - 10, by + bh / 2 - 1, 20, 5);
+      const bannerW = bw * 0.62, bannerH = bh * 0.42;
+      g.fillStyle = "#05040f"; g.fillRect(bx - bannerW / 2, by - bannerH / 2, bannerW, bannerH);
+      const msgs = ["GM", "WAGMI", `BLOCK #${this.blockNow() % 100000}`, `BTC ${this.btc}`, "SMIT3Y.XYZ"];
+      const msg = msgs[Math.floor(t / 3.2) % msgs.length];
+      g.save(); g.beginPath(); g.rect(bx - bannerW / 2, by - bannerH / 2, bannerW, bannerH); g.clip();
+      g.font = `800 ${Math.round(bannerH * 0.72)}px Inconsolata, monospace`; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillStyle = "#ffcb05"; g.fillText(msg, bx, by + 1);
+      g.restore();
+      if (Math.sin(t * 4) > 0) { g.fillStyle = "#ff5a5f"; g.fillRect(bx + bw / 2 - 2, by - 1, 2, 2); }
+      // a plane, high up, blinking
+      const px = ((t * 26) % (W + 400)) - 200, py = this.skyTop * 0.35 + 30;
+      g.fillStyle = pal.light ? "#ffffff" : "#c9c6ee"; g.fillRect(W - px, py, 8, 1.5);
+      if (Math.sin(t * 5) > 0.3) { g.fillStyle = "#ff5a5f"; g.fillRect(W - px, py - 1, 1.5, 1.5); g.fillStyle = "#3ddc84"; g.fillRect(W - px + 7, py - 1, 1.5, 1.5); }
+    }
+
+    drawWindows(g: Ctx, t: number) {
+      const off = this.pal.winOff;
+      for (const w of this.twinkle) {
+        if (Math.sin(t * 0.9 + w.ph) < -0.55) { g.fillStyle = off; g.fillRect(w.x, w.y, w.w, w.h); }
+      }
+      for (const b of this.blinkers) {
+        if (Math.sin(t * 2.6 + b.ph) > 0.4) {
+          g.fillStyle = "#ff5a5f"; g.fillRect(b.x - 1, b.y - 2, 2.5, 2.5);
+          g.fillStyle = "rgba(255,90,95,0.18)"; g.beginPath(); g.arc(b.x, b.y - 1, 5, 0, TAU); g.fill();
+        }
+      }
+    }
+
+    drawAds(g: Ctx, t: number) {
+      for (const a of this.ads) {
+        const h = 12 * this.k;
+        const flick = !this.reduce && Math.sin(t * 11 + a.ph) > 0.97;
+        g.fillStyle = "rgba(5,4,15,0.92)";
+        g.fillRect(a.x, a.y, a.w, h);
+        g.strokeStyle = rgba(a.c, flick ? 0.2 : 0.9);
+        g.lineWidth = 1;
+        g.strokeRect(a.x + 0.5, a.y + 0.5, a.w - 1, h - 1);
+        g.font = `800 ${Math.round(h * 0.7)}px Inconsolata, monospace`;
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+        g.fillStyle = flick ? rgba(a.c, 0.25) : a.c;
+        const word = a.word === "ETH" ? `${Math.round(8 + 6 * Math.abs(Math.sin(t * 0.07)))} GWEI` : a.word;
+        g.fillText(word, a.x + a.w / 2, a.y + h / 2 + 0.5, a.w - 4);
+      }
+    }
+
+    drawLandmarkFx(g: Ctx, t: number) {
+      const { W, waterY: base, k } = this;
+      const skyH = base - this.skyTop;
+      const mw = (i: number) => MARKS[i].w * k * (this.mobile ? MARKS[i].mw : 1);
+      const font = (px: number, wt = 800) => `${wt} ${Math.round(px)}px Inconsolata, monospace`;
+
+      // 0 · home: string lights over the roof garden, a "gm" from the window
+      {
+        const m = MARKS[0], cx = m.x * W, w = mw(0), top = base - this.mh[MARKS.indexOf(m)];
+        for (let i = 0; i <= 10; i++) {
+          const u = i / 10;
+          const x = cx - w / 2 + 4 + u * (w - 8);
+          const y = top - 14 + Math.sin(u * Math.PI) * 6;
+          const on = Math.sin(t * 2 + i * 1.3) > -0.4 || this.hover === 0;
+          g.fillStyle = on ? ["#ffcf73", "#ff5aa8", "#17d4c8", "#a78bfa"][i % 4] : "rgba(255,255,255,0.15)";
+          g.beginPath(); g.arc(x, y, 1.4, 0, TAU); g.fill();
+        }
+        if (this.hover === 0 || this.state === 0) {
+          const bx = cx + w * 0.28, by = top + this.mh[MARKS.indexOf(m)] * 0.55;
+          g.fillStyle = "#f3f0ff";
+          g.beginPath(); g.roundRect(bx, by - 20, 34, 16, 4); g.fill();
+          g.beginPath(); g.moveTo(bx + 6, by - 4); g.lineTo(bx + 2, by + 2); g.lineTo(bx + 12, by - 4); g.fill();
+          g.fillStyle = "#1b1f36"; g.font = font(11); g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("gm ☕", bx + 17, by - 12);
+        }
+      }
+
+      // 1 · exchange: holographic coin, price board, vertical ticker
+      {
+        const m = MARKS[1], cx = m.x * W, w = mw(1), h = this.mh[MARKS.indexOf(m)], top = base - h, c1 = 30 * k;
+        const r = this.roofs[1];
+        const sp = Math.cos(t * 1.6);
+        const cy = r.y + Math.sin(t * 1.2) * 3;
+        const rad = 15 * k + 2;
+        const glow = g.createRadialGradient(r.x, cy, 0, r.x, cy, rad * 2.6);
+        glow.addColorStop(0, "rgba(246,196,69,0.45)"); glow.addColorStop(1, "rgba(246,196,69,0)");
+        g.fillStyle = glow; g.fillRect(r.x - rad * 3, cy - rad * 3, rad * 6, rad * 6);
+        g.fillStyle = "rgba(246,196,69,0.25)";
+        g.beginPath(); g.moveTo(r.x - 3, top + 2); g.lineTo(r.x - rad * 0.8, cy + rad * 0.6); g.lineTo(r.x + rad * 0.8, cy + rad * 0.6); g.lineTo(r.x + 3, top + 2); g.fill();
+        g.save(); g.translate(r.x, cy); g.scale(Math.max(0.08, Math.abs(sp)), 1);
+        g.fillStyle = sp > 0 ? "#f6c445" : "#c99a2a"; g.beginPath(); g.arc(0, 0, rad, 0, TAU); g.fill();
+        g.strokeStyle = "#fff0a8"; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, rad * 0.78, 0, TAU); g.stroke();
+        if (sp > 0) { g.fillStyle = "#8a5a10"; g.font = font(rad * 1.2, 900); g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("₿", 0, 1); }
+        g.restore();
+        g.fillStyle = "#3ddc84"; g.font = font(11 * k + 2); g.textAlign = "center"; g.textBaseline = "middle";
+        g.fillText("BTC " + this.btc, cx, top + c1 + 10 * k + 7.5 * k);
+        // vertical ticker running down the right edge
+        const sx = cx + w / 2 - 11, sy = top + c1 + 6, sh = h - c1 - 34;
+        g.save(); g.beginPath(); g.rect(sx, sy, 9, sh); g.clip();
+        g.translate(sx + 4.5, sy); g.rotate(Math.PI / 2);
+        g.font = font(8); g.textAlign = "left"; g.textBaseline = "middle"; g.fillStyle = "#9cc2ff";
+        const tw = g.measureText(this.tickerText + "   ·   ").width;
+        const off = (t * 22) % tw;
+        g.fillText(this.tickerText + "   ·   " + this.tickerText, -off, 0);
+        g.restore();
+        // crown chase lights
+        const chase = Math.floor(t * 4) % 6;
+        for (let i = 0; i < 6; i++) {
+          g.fillStyle = i === chase || this.hover === 1 ? "#cfe0ff" : "rgba(207,224,255,0.25)";
+          g.fillRect(cx - w * 0.2 + (i * w * 0.4) / 5 - 1, top + 3, 2, 2);
+        }
+      }
+
+      // 2 · research: telescope beam, constellation on hover, rising notes
+      {
+        const r = this.roofs[2];
+        const m = MARKS[2], dr = (mw(2) * 0.82) / 2;
+        const ang = -Math.PI / 2 - 0.55 + Math.sin(t * 0.4) * 0.35;
+        const L = this.H * 0.9;
+        g.save(); g.translate(r.x, r.y + dr * 0.7); g.rotate(ang);
+        const lg = g.createLinearGradient(0, 0, L, 0);
+        const a = this.hover === 2 || this.state === 2 ? 0.5 : 0.3;
+        lg.addColorStop(0, rgba(m.c, a)); lg.addColorStop(1, rgba(m.c, 0));
+        g.fillStyle = lg; g.beginPath(); g.moveTo(0, -2); g.lineTo(L, -L * 0.05); g.lineTo(L, L * 0.05); g.lineTo(0, 2); g.fill();
+        g.restore();
+        if (this.hover === 2 || this.state === 2) {
+          const ex = r.x + Math.cos(ang) * 150, ey = r.y + dr * 0.7 + Math.sin(ang) * 150;
+          const pts = [[0, 0], [22, -10], [40, 4], [58, -16], [34, -30]].map(([dx, dy]) => [ex + dx - 28, ey + dy]);
+          g.strokeStyle = "rgba(191,246,240,0.6)"; g.lineWidth = 0.8;
+          g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.stroke();
+          for (const [x, y] of pts) { g.fillStyle = "#ffffff"; g.beginPath(); g.arc(x, y, 1.8, 0, TAU); g.fill(); }
+        }
+        for (let i = 0; i < 4; i++) {
+          const ph = (t * 0.18 + i / 4) % 1;
+          const x = r.x - 24 + i * 16 + Math.sin(t + i) * 6, y = r.y - ph * 60;
+          g.fillStyle = `rgba(243,240,255,${0.7 * (1 - ph)})`;
+          g.fillRect(x, y, 5, 6);
+          g.fillStyle = `rgba(23,212,200,${0.6 * (1 - ph)})`;
+          g.fillRect(x + 1, y + 2, 3, 0.8); g.fillRect(x + 1, y + 3.6, 2, 0.8);
+        }
+      }
+
+      // 3 · S&Y: live clock hands (Ann Arbor time), beacon, tossed caps on hover
+      {
+        const m = MARKS[3], h = this.mh[MARKS.indexOf(m)], top = base - h, sh = h * 0.3, cx = m.x * W;
+        const cy = top + sh * 0.72, rr = 9 * k + 1;
+        const [hh, mm] = this.clockHM;
+        const ma = (mm / 60) * TAU - Math.PI / 2, ha = (((hh % 12) + mm / 60) / 12) * TAU - Math.PI / 2;
+        g.strokeStyle = "#2a2348"; g.lineCap = "round";
+        g.lineWidth = 1.6; g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(ha) * rr * 0.5, cy + Math.sin(ha) * rr * 0.5); g.stroke();
+        g.lineWidth = 1; g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + Math.cos(ma) * rr * 0.8, cy + Math.sin(ma) * rr * 0.8); g.stroke();
+        g.lineCap = "butt";
+        const r = this.roofs[3];
+        const a = 0.4 + 0.6 * Math.max(0, Math.sin(t * 2.4));
+        const gl = g.createRadialGradient(r.x, r.y, 0, r.x, r.y, 20);
+        gl.addColorStop(0, `rgba(255,203,5,${a})`); gl.addColorStop(1, "rgba(255,203,5,0)");
+        g.fillStyle = gl; g.fillRect(r.x - 20, r.y - 20, 40, 40);
+        if ((this.hover === 3 || this.state === 3) && !this.reduce && Math.random() < 0.06) {
+          this.sparks.push({ kind: "cap", x: cx + (Math.random() - 0.5) * 30, y: base - 20, vx: (Math.random() - 0.5) * 50, vy: -90 - Math.random() * 50, born: t, life: 2, c: "#1b1f36" });
+        }
+      }
+
+      // 4 · arena: jumbotron replay + score, flashbulbs on hover
+      {
+        const m = MARKS[4], cx = m.x * W, w = mw(4), h = this.mh[MARKS.indexOf(m)], top = base - h, rh = h * 0.35;
+        const sx = cx - w * 0.3 + 2, sy = top + rh + 8 * k + 2, sw = w * 0.6 - 4, sh = h * 0.36 - 4;
+        g.save(); g.beginPath(); g.rect(sx, sy, sw, sh); g.clip();
+        g.fillStyle = "#0b1a3a"; g.fillRect(sx, sy, sw, sh);
+        const cyc = t * 0.45;
+        const phase = cyc % 1;
+        if (Math.floor(cyc) !== this.lastShot && phase > 0.75) { this.lastShot = Math.floor(cyc); this.score[0] += this.lastShot % 3 === 2 ? 3 : 2; if (this.lastShot % 2) this.score[1] += 2; }
+        if (phase < 0.75) {
+          const u = phase / 0.75;
+          const P = (v: number) => [sx + sw * (0.15 + v * 0.65), sy + sh * (0.85 - Math.sin(v * Math.PI) * 0.7 + v * 0.05)];
+          g.strokeStyle = "rgba(255,203,5,0.35)"; g.lineWidth = 1.2; g.setLineDash([3, 3]);
+          g.beginPath();
+          for (let v = 0; v <= u; v += 0.05) { const [px, py] = P(v); v === 0 ? g.moveTo(px, py) : g.lineTo(px, py); }
+          g.stroke(); g.setLineDash([]);
+          const [bx, by] = P(u);
+          g.fillStyle = "#ff7a2b"; g.beginPath(); g.arc(bx, by, 3.2 * k + 0.6, 0, TAU); g.fill();
+        } else {
+          g.fillStyle = "#ffcb05"; g.font = font(sh * 0.36, 900); g.textAlign = "center"; g.textBaseline = "middle";
+          g.fillText(Math.floor(t / 2.2) % 2 ? "GO BLUE" : "SWISH", sx + sw / 2, sy + sh / 2);
+        }
+        g.strokeStyle = "#f3f0ff"; g.lineWidth = 1.5; g.beginPath(); g.moveTo(sx + sw * 0.82, sy + sh * 0.25); g.lineTo(sx + sw * 0.92, sy + sh * 0.25); g.stroke();
+        g.fillStyle = "rgba(5,4,15,0.85)"; g.fillRect(sx, sy + sh - 11, sw, 11);
+        g.font = font(8); g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = "#f3f0ff";
+        g.fillText(`M ${this.score[0]}  ·  ${this.score[1]} OPP`, sx + sw / 2, sy + sh - 5.5);
+        g.restore();
+        // floodlight beams
+        for (const [mx, dir] of [[cx - w / 2 - 6, 1], [cx + w / 2 + 6, -1]] as Array<[number, number]>) {
+          const lg = g.createLinearGradient(mx, top - 8, mx + dir * w * 0.4, top + rh);
+          lg.addColorStop(0, "rgba(255,247,214,0.25)"); lg.addColorStop(1, "rgba(255,247,214,0)");
+          g.fillStyle = lg; g.beginPath(); g.moveTo(mx, top - 8); g.lineTo(mx + dir * w * 0.45, top + rh * 0.4); g.lineTo(mx + dir * w * 0.3, top + rh * 1.1); g.fill();
+        }
+        if ((this.hover === 4 || this.state === 4) && !this.reduce && Math.random() < 0.3) {
+          this.sparks.push({ kind: "flash", x: cx + (Math.random() - 0.5) * w * 0.9, y: base - h * 0.2 + Math.random() * h * 0.12, vx: 0, vy: 0, born: t, life: 0.12, c: "#ffffff" });
+        }
+      }
+
+      // 5 · pending: the crane hoists one block per ETH slot
+      {
+        const m = MARKS[5], cx = m.x * W, w = mw(5), top = base - this.mh[MARKS.indexOf(m)];
+        const mx = cx + w / 2 + 12 * k, jy = top - 32 * k;
+        const slot = ((Date.now() / 1000 - this.anchorTs) % 12 + 12) % 12;
+        const u = slot / 12;
+        const swing = u < 0.5 ? u / 0.5 : 1;
+        const hx = mx - 66 * k + swing * (cx - (mx - 66 * k));
+        const lift = u < 0.5 ? 1 - u / 0.5 : u < 0.85 ? (u - 0.5) / 0.35 : 1;
+        const drop = 10 * k + (1 - Math.min(1, lift)) * (base - top - 40) * 0.6 + 6;
+        const s = 14 * k + 2;
+        g.strokeStyle = "#c9cbd8"; g.lineWidth = 1; g.beginPath(); g.moveTo(hx, jy + 3); g.lineTo(hx, jy + drop); g.stroke();
+        g.fillStyle = "#5a5a6a"; g.fillRect(hx - 3, jy + 1, 6, 3);
+        g.fillStyle = "rgba(167,139,250,0.28)"; g.strokeStyle = "#a78bfa"; g.lineWidth = 1.5;
+        g.fillRect(hx - s / 2, jy + drop, s, s); g.strokeRect(hx - s / 2, jy + drop, s, s);
+        g.fillStyle = "#e9e2ff"; g.font = font(8 * k + 2); g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("#6", hx, jy + drop + s / 2);
+        if (Math.sin(t * 4) > 0) { g.fillStyle = "#ff5a5f"; g.beginPath(); g.arc(mx, top - 46 * k, 2, 0, TAU); g.fill(); }
+        // welding sparks on the scaffold
+        if (!this.reduce && Math.random() < (this.hover === 5 || this.state === 5 ? 0.5 : 0.12)) {
+          const wx = cx + (Math.random() - 0.5) * w * 0.7, wy = base - this.mh[MARKS.indexOf(m)] * (0.45 + Math.random() * 0.35);
+          for (let i = 0; i < 4; i++) this.sparks.push({ kind: "spark", x: wx, y: wy, vx: (Math.random() - 0.5) * 60, vy: -Math.random() * 40, born: t, life: 0.5, c: "#fff2a8" });
+        }
+      }
+    }
+
+    // the chain: a glowing cable roof to roof, packets riding block to block
+    drawChain(g: Ctx, t: number) {
+      const R = this.roofs;
+      if (R.length < 2) return;
+      const sagOf = (a: { x: number }, b: { x: number }) => Math.abs(b.x - a.x) * 0.12;
+      const seg = (i: number, u: number) => {
+        const a = R[i], b = R[i + 1];
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 + sagOf(a, b);
+        return [(1 - u) ** 2 * a.x + 2 * (1 - u) * u * mx + u * u * b.x, (1 - u) ** 2 * a.y + 2 * (1 - u) * u * my + u * u * b.y];
+      };
+      g.save();
+      g.lineCap = "round";
+      for (let i = 0; i < R.length - 1; i++) {
+        const a = R[i], b = R[i + 1];
+        g.beginPath();
+        g.moveTo(a.x, a.y);
+        g.quadraticCurveTo((a.x + b.x) / 2, (a.y + b.y) / 2 + sagOf(a, b), b.x, b.y);
+        g.setLineDash(i === R.length - 2 ? [4, 6] : []);
+        g.strokeStyle = this.pal.light ? "rgba(80,60,160,0.35)" : "rgba(167,139,250,0.25)";
+        g.lineWidth = 5;
+        g.stroke();
+        g.strokeStyle = this.pal.light ? "rgba(80,60,160,0.85)" : "rgba(220,210,255,0.8)";
+        g.lineWidth = 1.3;
+        g.stroke();
+      }
+      g.setLineDash([]);
+      const hops = R.length - 1;
+      for (let p = 0; p < 2; p++) {
+        const cyc = ((t / 1.6 + p * hops * 0.5) % hops);
+        const i = Math.floor(cyc), u = cyc - i;
+        const e = u * u * (3 - 2 * u);
+        const [x, y] = seg(i, e);
+        const col = MARKS[i + 1].c;
+        const gl = g.createRadialGradient(x, y, 0, x, y, 14);
+        gl.addColorStop(0, col); gl.addColorStop(1, rgba(col, 0));
+        g.fillStyle = gl; g.fillRect(x - 14, y - 14, 28, 28);
+        g.fillStyle = "#fff"; g.fillRect(x - 2.5, y - 2.5, 5, 5);
+        if (u < 0.15) {
+          const r = R[i], a = 1 - u / 0.15;
+          g.strokeStyle = MARKS[i].c; g.globalAlpha = a; g.lineWidth = 2;
+          g.beginPath(); g.arc(r.x, r.y, 6 + (1 - a) * 16, 0, TAU); g.stroke(); g.globalAlpha = 1;
+        }
+      }
+      const ride = this.camAnim?.ride;
+      if (ride && this.rideU >= 0) this.drawRider(g, ride.a, ride.b, this.rideU, seg);
+      // roof nodes — filled once you've explored that block
+      R.forEach((r, i) => {
+        const done = this.visited.has(this.blocks[i]?.id);
+        g.fillStyle = done ? MARKS[i].c : "#05051a";
+        g.strokeStyle = MARKS[i].c; g.lineWidth = 2;
+        g.beginPath(); g.arc(r.x, r.y, done ? 4.5 : 4, 0, TAU); g.fill(); g.stroke();
+      });
+      g.restore();
+    }
+
+    // the hop between towers: a bright packet runs the cable, lighting it behind
+    drawRider(g: Ctx, a: number, b: number, u: number, seg: (i: number, u: number) => number[]) {
+      const R = this.roofs, last = R.length - 1;
+      const at = (pos: number) => {
+        const p = clamp(pos, 0, last);
+        const i = Math.min(last - 1, Math.floor(p));
+        return seg(i, p - i);
+      };
+      const e = ease(clamp(u * 1.08, 0, 1));
+      const pos = a + (b - a) * e;
+      const col = MARKS[b].c;
+      // lit cable from the start tower to the packet
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      g.lineCap = "round";
+      const steps = Math.max(8, Math.ceil(Math.abs(pos - a) * 28));
+      g.beginPath();
+      for (let n = 0; n <= steps; n++) {
+        const [x, y] = at(a + ((pos - a) * n) / steps);
+        if (n) g.lineTo(x, y); else g.moveTo(x, y);
+      }
+      g.strokeStyle = rgba(col, 0.35 * (1 - Math.max(0, u - 0.75) * 4));
+      g.lineWidth = 9;
+      g.stroke();
+      g.strokeStyle = rgba(col, 0.9 * (1 - Math.max(0, u - 0.75) * 4));
+      g.lineWidth = 2.2;
+      g.stroke();
+      // comet trail
+      const dir = Math.sign(b - a) || 1;
+      for (let n = 10; n >= 0; n--) {
+        const [x, y] = at(pos - dir * n * 0.035);
+        const r = 7 - n * 0.5;
+        g.fillStyle = rgba(col, 0.5 * (1 - n / 11));
+        g.beginPath(); g.arc(x, y, Math.max(1, r), 0, TAU); g.fill();
+      }
+      const [hx, hy] = at(pos);
+      const gl = g.createRadialGradient(hx, hy, 0, hx, hy, 34);
+      gl.addColorStop(0, rgba(col, 0.9)); gl.addColorStop(1, rgba(col, 0));
+      g.fillStyle = gl; g.fillRect(hx - 34, hy - 34, 68, 68);
+      g.fillStyle = "#fff";
+      g.beginPath(); g.arc(hx, hy, 4, 0, TAU); g.fill();
+      // arrival ping on the destination roof
+      if (u > 0.8) {
+        const k2 = (u - 0.8) / 0.2, r = R[b];
+        g.strokeStyle = rgba(col, 1 - k2); g.lineWidth = 3;
+        g.beginPath(); g.arc(r.x, r.y, 6 + k2 * 30, 0, TAU); g.stroke();
+      }
+      g.restore();
+    }
+
+    drawTram(g: Ctx, t: number) {
+      const { W, waterY, k } = this;
+      const len = 120 * k + 40;
+      const x = (((t * 38) % (W + len * 2)) + W + len * 2) % (W + len * 2) - len;
+      const y = waterY - 7;
+      for (let c = 0; c < 3; c++) {
+        const cx = x + c * (len / 3 + 2);
+        g.fillStyle = this.pal.light ? "#e9e4ff" : "#1f1b4f";
+        g.fillRect(cx, y - 9, len / 3, 8);
+        g.fillStyle = "#a78bfa"; g.fillRect(cx, y - 9, len / 3, 1.5);
+        g.fillStyle = "#ffcf73";
+        for (let wx = cx + 3; wx < cx + len / 3 - 4; wx += 6) g.fillRect(wx, y - 6, 3.5, 3);
+      }
+      g.fillStyle = "#fff6c8"; g.fillRect(x + len + 2 * 2 - 1, y - 6, 2, 2);
+    }
+
+    drawSeason(g: Ctx, t: number, dt: number) {
+      void dt;
+      if (this.season !== "halloween") return;
+      // bats flitting over the skyline, a pumpkin on the café
+      for (let i = 0; i < 5; i++) {
+        const x = ((t * (24 + i * 7) + i * 300) % (this.W + 80)) - 40;
+        const y = this.skyTop + 40 + i * 22 + Math.sin(t * 3 + i) * 14;
+        const flap = Math.sin(t * 18 + i) * 3;
+        g.fillStyle = this.pal.light ? "#2a2348" : "#0a0818";
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x - 6, y - flap); g.lineTo(x - 3, y + 1); g.lineTo(x, y + 2); g.lineTo(x + 3, y + 1); g.lineTo(x + 6, y - flap); g.closePath(); g.fill();
+      }
+      const m = MARKS[0];
+      const px = m.x * this.W + MARKS[0].w * this.k * 0.36, py = this.waterY - 10;
+      g.fillStyle = "#ff7a1a"; g.beginPath(); g.ellipse(px, py, 5, 4, 0, 0, TAU); g.fill();
+      g.fillStyle = "#3e7d2a"; g.fillRect(px - 0.6, py - 6, 1.6, 2.5);
+      g.fillStyle = Math.sin(t * 9) > -0.6 ? "#ffe066" : "#ffb020"; g.fillRect(px - 2.5, py - 1.5, 1.5, 1.5); g.fillRect(px + 1, py - 1.5, 1.5, 1.5); g.fillRect(px - 2, py + 1, 4, 1);
+    }
+
+    drawSnow(g: Ctx, t: number, dt: number) {
+      g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      g.fillStyle = "rgba(255,255,255,0.8)";
+      for (const f of this.flakes) {
+        if (!this.reduce) { f.y += f.s * 18 * dt; f.x += Math.sin(t + f.ph) * 0.3; }
+        if (f.y > this.H) { f.y = -4; f.x = Math.random() * this.W; }
+        g.fillRect(f.x, f.y, f.s, f.s);
+      }
+    }
+
+    drawWater(g: Ctx, t: number) {
+      const { W, H, waterY, pal, k } = this;
+      const wh = Math.max(40, H - waterY);
+      // moon / sun glitter path
+      const gx = pal.light ? this.sunPos.x : W * 0.86;
+      g.fillStyle = pal.light ? "rgba(255,230,180,0.45)" : "rgba(255,244,214,0.3)";
+      for (let i = 0; i < 18; i++) {
+        const y = waterY + 4 + i * (wh / 18);
+        const wob = Math.sin(t * 2 + i * 1.7) * 6;
+        g.fillRect(gx - 12 + wob - i * 0.6, y, 24 - i * 0.8 + Math.abs(wob), 1.2);
+      }
+      g.fillStyle = pal.light ? "rgba(255,255,255,0.25)" : "rgba(200,190,255,0.12)";
+      for (let i = 0; i < 30; i++) {
+        const y = waterY + 4 + ((i * 37) % Math.max(1, wh - 6));
+        const x = ((i * 173 + t * (10 + (i % 5) * 4)) % (W + 60)) - 30;
+        g.fillRect(x, y, 14 + (i % 4) * 8, 1);
+      }
+      // buoys
+      for (let i = 0; i < 4; i++) {
+        const x = W * (0.15 + i * 0.24), y = waterY + wh * 0.62 + Math.sin(t * 1.4 + i) * 1.5;
+        g.fillStyle = "#2a2650"; g.fillRect(x - 2, y - 4, 4, 5);
+        if (Math.sin(t * 2 + i * 2) > 0) { g.fillStyle = i % 2 ? "#3ddc84" : "#ff5a5f"; g.fillRect(x - 1, y - 6, 2, 2); g.fillStyle = rgba(i % 2 ? "#3ddc84" : "#ff5a5f", 0.2); g.beginPath(); g.arc(x, y - 5, 6, 0, TAU); g.fill(); }
+      }
+      // a fish now and then
+      const fc = (t * 0.23) % 1;
+      if (fc < 0.12) {
+        const u = fc / 0.12;
+        const fx = W * (0.3 + ((Math.floor(t * 0.23) * 0.37) % 0.5)), fy = waterY + wh * 0.35;
+        g.fillStyle = pal.light ? "#e9e4ff" : "#9fb4e8";
+        g.save(); g.translate(fx + u * 18, fy - Math.sin(u * Math.PI) * 14); g.rotate(-1 + u * 2);
+        g.beginPath(); g.ellipse(0, 0, 4, 1.6, 0, 0, TAU); g.fill(); g.restore();
+        if (u > 0.85) { g.strokeStyle = "rgba(255,255,255,0.4)"; g.beginPath(); g.ellipse(fx + 18, fy, 6 * (u - 0.8) * 8, 1.5, 0, 0, TAU); g.stroke(); }
+      }
+      this.drawBoats(g, t, wh);
+    }
+
+    // ── background fireworks ─────────────────────────────────────────
+    launchBg(t: number, x?: number) {
+      const colors = ["#ff5aa8", "#17d4c8", "#ffcb05", "#4c8dff", "#a78bfa", "#3ddc84", "#ff8a3d", "#ffffff"];
+      const types = ["peony", "peony", "ring", "willow", "palm", "glitter", "double", "heart"];
+      const type = types[Math.floor(Math.random() * types.length)];
+      const c = colors[Math.floor(Math.random() * colors.length)];
+      const c2 = colors[Math.floor(Math.random() * colors.length)];
+      const sx = x ?? this.W * (0.06 + Math.random() * 0.88);
+      const ty = this.skyTop + (this.waterY - this.skyTop) * (0.02 + Math.random() * 0.34);
+      const y0 = this.waterY - 40;
+      this.bgFw.push({ x: sx, y: y0, px: sx, py: y0, vx: (Math.random() - 0.5) * 8, vy: -(y0 - ty) / 1.1, born: t, life: 1.1, c: "#fff2c8", drag: 1, grav: 0, trail: 0.05, glitter: false, rocket: { ty, type, c2: type === "willow" ? "#ffcf73" : c2 } });
+      void c;
+    }
+
+    burstBg(r: BgSpark, t: number) {
+      const type = r.rocket!.type, c2 = r.rocket!.c2;
+      const c = type === "willow" ? "#ffcf73" : ["#ff5aa8", "#17d4c8", "#ffcb05", "#4c8dff", "#a78bfa", "#3ddc84"][Math.floor(Math.random() * 6)];
+      const add = (vx: number, vy: number, col: string, life: number, drag: number, grav: number, trail: number, glitter = false) =>
+        this.bgFw.push({ x: r.x, y: r.y, px: r.x, py: r.y, vx, vy, born: t, life, c: col, drag, grav, trail, glitter });
+      const k = clamp(this.k, 0.7, 1.2);
+      if (type === "ring") {
+        for (let i = 0; i < 36; i++) { const a = (i / 36) * TAU; add(Math.cos(a) * 46 * k, Math.sin(a) * 46 * k, i % 2 ? c : c2, 1.4, 0.975, 14, 0.06); }
+      } else if (type === "willow") {
+        for (let i = 0; i < 46; i++) { const a = Math.random() * TAU, sp = (18 + Math.random() * 30) * k; add(Math.cos(a) * sp, Math.sin(a) * sp, "#ffcf73", 2.6 + Math.random(), 0.982, 18, 0.22); }
+      } else if (type === "palm") {
+        for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU - Math.PI / 2; for (let j = 0; j < 5; j++) add(Math.cos(a) * (40 - j * 4) * k, Math.sin(a) * (40 - j * 4) * k, j ? c : "#ffffff", 1.6, 0.975, 26, 0.14); }
+      } else if (type === "glitter") {
+        for (let i = 0; i < 50; i++) { const a = Math.random() * TAU, sp = Math.random() * 44 * k; add(Math.cos(a) * sp, Math.sin(a) * sp, "#ffffff", 1.6 + Math.random() * 0.8, 0.97, 16, 0.03, true); }
+      } else if (type === "double") {
+        for (let i = 0; i < 30; i++) { const a = (i / 30) * TAU; add(Math.cos(a) * 52 * k, Math.sin(a) * 52 * k, c, 1.5, 0.975, 16, 0.08); add(Math.cos(a) * 26 * k, Math.sin(a) * 26 * k, c2, 1.3, 0.975, 16, 0.08); }
+      } else if (type === "heart") {
+        for (let i = 0; i < 40; i++) {
+          const a = (i / 40) * TAU;
+          const hx = 16 * Math.sin(a) ** 3, hy = -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a));
+          add(hx * 2.6 * k, hy * 2.6 * k, "#ff5aa8", 1.5, 0.965, 8, 0.05);
+        }
+      } else {
+        for (let i = 0; i < 44; i++) { const a = Math.random() * TAU, sp = (24 + Math.random() * 30) * k; add(Math.cos(a) * sp, Math.sin(a) * sp, Math.random() < 0.2 ? "#ffffff" : c, 1.3 + Math.random() * 0.5, 0.975, 18, 0.08); }
+      }
+      // a soft flash in the sky
+      this.bgFw.push({ x: r.x, y: r.y, px: r.x, py: r.y, vx: 0, vy: 0, born: t, life: 0.45, c: type === "willow" ? "#ffcf73" : c, drag: 1, grav: 0, trail: -1, glitter: false });
+    }
+
+    drawBgFireworks(g: Ctx, t: number, dt: number) {
+      if (this.reduce) return;
+      // a steady show, with a little finale every half minute or so
+      if (t > this.nextBg) {
+        this.launchBg(t);
+        this.nextBg = t + 1.1 + Math.random() * 2.2;
+      }
+      if (t > this.nextFinale) {
+        if (this.nextFinale) for (let i = 0; i < 5; i++) setTimeout(() => this.launchBg(performance.now() / 1000, this.W * (0.15 + i * 0.17)), i * 160);
+        this.nextFinale = t + 26 + Math.random() * 12;
+      }
+      if (!this.bgFw.length) return;
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      g.lineCap = "round";
+      const keep: BgSpark[] = [];
+      for (const p of this.bgFw) {
+        const age = t - p.born;
+        if (age > p.life) {
+          if (p.rocket) this.burstBg(p, t);
+          continue;
+        }
+        keep.push(p);
+        if (p.trail < 0) {
+          const a = 1 - age / p.life, R = 70;
+          const gr = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
+          gr.addColorStop(0, rgba(p.c, 0.22 * a)); gr.addColorStop(1, rgba(p.c, 0));
+          g.fillStyle = gr; g.fillRect(p.x - R, p.y - R, R * 2, R * 2);
+          continue;
+        }
+        p.px = p.x; p.py = p.y;
+        p.vx *= Math.pow(p.drag, dt * 60); p.vy *= Math.pow(p.drag, dt * 60);
+        p.vy += p.grav * dt;
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        if (p.rocket) {
+          // rising shell: a short sparkling trail
+          g.strokeStyle = "rgba(255,240,200,0.7)"; g.lineWidth = 1.2;
+          g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * 0.06, p.y - p.vy * 0.06); g.stroke();
+          continue;
+        }
+        const a = Math.max(0, 1 - age / p.life);
+        if (p.glitter && Math.sin(t * 40 + p.vx * 3) < 0) continue;
+        g.strokeStyle = rgba(p.c, a * 0.9);
+        g.lineWidth = 1.3;
+        g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * p.trail, p.y - p.vy * p.trail); g.stroke();
+      }
+      this.bgFw = keep;
+      g.restore();
+    }
+
+    // ── the harbour fleet ────────────────────────────────────────────
+    drawBoats(g: Ctx, t: number, wh: number) {
+      const { W, waterY, k, pal } = this;
+      const span = W + 400;
+      const now = performance.now() / 1000;
+      for (const b of this.boats) {
+        const dir = b.speed > 0 ? 1 : -1;
+        const sc = (0.9 + b.lane * 0.6) * (0.7 + k * 0.4);
+        const x = ((((b.off + t * b.speed) % span) + span) % span) - 200;
+        const bobAmp = b.kind === "duck" ? 2.2 : b.kind === "kayak" || b.kind === "jetski" ? 1.6 : 1;
+        const y = waterY + wh * (0.14 + b.lane * 0.74) + Math.sin(t * 1.5 + b.off) * bobAmp;
+        b.sx = x; b.sy = y; b.sc = sc;
+        if (x < -150 || x > W + 150) continue;
+        const L = b.L;
+        g.save();
+        g.translate(x, y);
+        g.scale(sc * dir, sc);
+        // wake
+        if (b.kind !== "sub") {
+          const wl = 30 + Math.abs(b.speed) * 1.5;
+          g.strokeStyle = "rgba(220,215,255,0.25)"; g.lineWidth = 1 / sc;
+          g.beginPath(); g.moveTo(-L / 2, 2); g.lineTo(-L / 2 - wl, 5); g.moveTo(-L / 2, 2); g.lineTo(-L / 2 - wl, -1); g.stroke();
+        }
+        this.drawBoat(g, b.kind, L, t, b.off, dir);
+        g.restore();
+        // a speech bubble when tapped (drawn unflipped)
+        if (b.sayUntil > now) {
+          const bx = x, by = y - 30 * sc - 10;
+          g.font = "800 11px Inconsolata, monospace";
+          const tw = g.measureText(b.say).width + 12;
+          g.fillStyle = pal.light ? "#ffffff" : "#f3f0ff";
+          g.beginPath(); g.roundRect(bx - tw / 2, by - 16, tw, 16, 5); g.fill();
+          g.beginPath(); g.moveTo(bx - 3, by); g.lineTo(bx, by + 5); g.lineTo(bx + 3, by); g.fill();
+          g.fillStyle = "#1b1f36"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(b.say, bx, by - 8);
+        }
+      }
+    }
+
+    // one boat, facing right, waterline at y = 0
+    drawBoat(g: Ctx, kind: BoatKind, L: number, t: number, seed: number, dir: number) {
+      // boats are mirrored when heading left; their lettering shouldn't be
+      const txt = (str: string, x: number, y: number) => {
+        g.save(); g.translate(x, y); g.scale(dir, 1); g.fillText(str, 0, 0); g.restore();
+      };
+      const hull = (col: string, h = 7, bow = 8) => {
+        g.fillStyle = col;
+        g.beginPath(); g.moveTo(-L / 2, -h); g.lineTo(L / 2, -h); g.lineTo(L / 2 - bow, 3); g.lineTo(-L / 2 + 2, 3); g.closePath(); g.fill();
+      };
+      const nav = () => { g.fillStyle = "#3ddc84"; g.fillRect(L / 2 - 3, -h0 - 1, 2, 2); };
+      let h0 = 7;
+      switch (kind) {
+        case "ferry": {
+          hull("#0f0e28");
+          g.fillStyle = "#1e1b4a"; g.fillRect(-L * 0.36, -15, L * 0.68, 8);
+          g.fillStyle = "#2a2660"; g.fillRect(-L * 0.24, -21, L * 0.4, 6);
+          g.fillStyle = "#ffcf73"; for (let w = -L * 0.32; w < L * 0.3; w += 5) g.fillRect(w, -13, 3, 3);
+          g.fillStyle = "#a78bfa"; g.fillRect(-L * 0.36, -7.5, L * 0.68, 1);
+          g.fillStyle = "#e9e4ff"; g.font = "800 4px Inconsolata, monospace"; g.textAlign = "center"; txt("LEDGER LINE", 0, -2.5);
+          nav();
+          break;
+        }
+        case "sail": {
+          hull("#e9e4ff", 4, 6);
+          g.fillStyle = "#8b6a4a"; g.fillRect(-1, -30, 1.5, 26);
+          g.fillStyle = "#f3f0ff"; g.beginPath(); g.moveTo(0, -30); g.lineTo(0, -6); g.lineTo(12, -6); g.closePath(); g.fill();
+          g.fillStyle = "#ff5aa8"; g.beginPath(); g.moveTo(-1, -29); g.lineTo(-1, -8); g.lineTo(-9, -8); g.closePath(); g.fill();
+          g.fillStyle = "#ffcb05"; g.fillRect(0, -33, 5, 3);
+          break;
+        }
+        case "ski": {
+          hull("#ff5aa8", 5, 7);
+          g.fillStyle = "#1b1f36"; g.fillRect(-2, -9, 6, 4);
+          g.fillStyle = "#9cc2ff"; g.fillRect(2, -9, 3, 3);
+          // tow rope and a skier carving behind
+          const sx = -L / 2 - 26 + Math.sin(t * 2 + seed) * 4;
+          g.strokeStyle = "rgba(255,255,255,0.7)"; g.lineWidth = 0.6;
+          g.beginPath(); g.moveTo(-L / 2, -4); g.lineTo(sx + 2, -9); g.stroke();
+          g.fillStyle = "#ffcb05"; g.fillRect(sx, -12, 3, 6);
+          g.fillStyle = "#e0b48c"; g.fillRect(sx + 0.5, -15, 2, 2.5);
+          g.fillStyle = "#17d4c8"; g.fillRect(sx - 3, -1, 9, 1.5);
+          g.fillStyle = "rgba(255,255,255,0.6)";
+          for (let i = 0; i < 6; i++) g.fillRect(sx - 5 - i * 3, -2 - Math.abs(Math.sin(t * 9 + i)) * 4, 1.5, 1.5);
+          break;
+        }
+        case "yacht": {
+          hull("#e9e4ff", 6, 10);
+          g.fillStyle = "#cfc8f2"; g.fillRect(-L * 0.3, -12, L * 0.55, 6);
+          g.fillStyle = "#1b1f36"; g.fillRect(-L * 0.24, -10.5, L * 0.42, 3);
+          g.fillStyle = "#e9e4ff"; g.fillRect(-L * 0.18, -17, L * 0.3, 5);
+          for (let i = 0; i < 9; i++) {
+            g.fillStyle = Math.sin(t * 6 + i) > 0 ? ["#ff5aa8", "#17d4c8", "#ffcb05"][i % 3] : "rgba(255,255,255,0.2)";
+            g.fillRect(-L * 0.42 + i * L * 0.1, -20 - Math.sin((i / 8) * Math.PI) * 4, 1.5, 1.5);
+          }
+          h0 = 6; nav();
+          break;
+        }
+        case "duck": {
+          // a giant rubber duck, just floating along
+          g.fillStyle = "#ffd23f";
+          g.beginPath(); g.ellipse(0, -5, L / 2, 8, 0, 0, TAU); g.fill();
+          g.beginPath(); g.ellipse(L * 0.18, -10, L * 0.28, 4, -0.3, Math.PI, TAU); g.fill();
+          g.beginPath(); g.arc(L * 0.32, -17, 6.5, 0, TAU); g.fill();
+          g.fillStyle = "#ff8a3d"; g.beginPath(); g.ellipse(L * 0.32 + 8, -16, 4, 2, 0, 0, TAU); g.fill();
+          g.fillStyle = "#1b1f36"; g.beginPath(); g.arc(L * 0.36, -19, 1.2, 0, TAU); g.fill();
+          g.fillStyle = "rgba(255,255,255,0.6)"; g.beginPath(); g.ellipse(-L * 0.15, -8, 4, 2, 0, 0, TAU); g.fill();
+          break;
+        }
+        case "pirate": {
+          hull("#5a3a22", 8, 10);
+          g.fillStyle = "#3e2716"; g.fillRect(-L / 2, -14, 12, 7);
+          g.fillStyle = "#ffcf73"; g.fillRect(-L / 2 + 3, -12, 2, 2); g.fillRect(-L / 2 + 7, -12, 2, 2);
+          g.fillStyle = "#c98a4a"; for (let p = -L / 2 + 14; p < L / 2 - 10; p += 6) g.fillRect(p, -6, 2, 2);
+          for (const mx of [-4, 10]) {
+            g.fillStyle = "#3e2716"; g.fillRect(mx, -38, 1.6, 30);
+            g.fillStyle = "#efe6d0"; g.fillRect(mx - 8, -34, 17, 10); g.fillRect(mx - 6, -22, 13, 8);
+          }
+          // the flag: a ₿ jolly roger, flapping
+          const fl = Math.sin(t * 6) * 1.2;
+          g.fillStyle = "#0b0918"; g.beginPath(); g.moveTo(10.8, -38); g.lineTo(20, -37 + fl); g.lineTo(20, -31 + fl); g.lineTo(10.8, -32); g.fill();
+          g.fillStyle = "#f6c445"; g.font = "900 5px Inconsolata, monospace"; g.textAlign = "center"; g.textBaseline = "middle"; txt("₿", 15.5, -34.5 + fl / 2);
+          break;
+        }
+        case "tug": {
+          hull("#c23b3b", 7, 6);
+          g.fillStyle = "#e9e4ff"; g.fillRect(-6, -14, 12, 7);
+          g.fillStyle = "#1b1f36"; g.fillRect(-4, -12, 3, 3); g.fillRect(1, -12, 3, 3);
+          g.fillStyle = "#1b1f36"; g.fillRect(-11, -18, 3, 11);
+          g.fillStyle = "#ffcb05"; g.fillRect(-11, -16, 3, 1.5);
+          g.fillStyle = "#1b1f36"; for (let i = -L / 2 + 2; i < L / 2 - 4; i += 5) { g.beginPath(); g.arc(i, -4, 1.4, 0, TAU); g.fill(); }
+          // smoke puffs drifting back
+          for (let i = 0; i < 4; i++) {
+            const ph = (t * 0.6 + i / 4 + seed) % 1;
+            g.fillStyle = `rgba(200,195,230,${0.35 * (1 - ph)})`;
+            g.beginPath(); g.arc(-10 - ph * 18, -20 - ph * 14, 2 + ph * 4, 0, TAU); g.fill();
+          }
+          nav();
+          break;
+        }
+        case "cargo": {
+          hull("#141233", 8, 10);
+          g.fillStyle = "#e9e4ff"; g.fillRect(-L / 2 + 2, -20, 9, 12);
+          g.fillStyle = "#ffcf73"; g.fillRect(-L / 2 + 4, -18, 5, 2);
+          const boxes: Array<[string, string]> = [["#f7931a", "₿"], ["#627eea", "Ξ"], ["#14c88a", "◎"], ["#a78bfa", "S3"], ["#ff5aa8", "GM"], ["#17d4c8", "L2"]];
+          let bi = 0;
+          for (let row = 0; row < 2; row++)
+            for (let x = -L / 2 + 14; x < L / 2 - 14; x += 11) {
+              if (row === 1 && (bi * 7) % 3 === 0) { bi++; continue; }
+              const [col, lab] = boxes[(bi++ + row) % boxes.length];
+              g.fillStyle = col; g.fillRect(x, -15 - row * 7, 10, 6.5);
+              g.fillStyle = "rgba(0,0,0,0.3)"; g.fillRect(x + 3, -15 - row * 7, 0.6, 6.5); g.fillRect(x + 6.5, -15 - row * 7, 0.6, 6.5);
+              g.fillStyle = "#ffffff"; g.font = "800 4px Inconsolata, monospace"; g.textAlign = "center"; g.textBaseline = "middle"; txt(lab, x + 5, -11.7 - row * 7);
+            }
+          g.fillStyle = "#c23b3b"; g.fillRect(-L / 2 + 4, -2, L - 14, 1.5);
+          nav();
+          break;
+        }
+        case "kayak": {
+          g.fillStyle = "#ff8a3d";
+          g.beginPath(); g.ellipse(0, -1, L / 2, 2.4, 0, 0, TAU); g.fill();
+          g.fillStyle = "#4c8dff"; g.fillRect(-2, -8, 4, 6);
+          g.fillStyle = "#e0b48c"; g.beginPath(); g.arc(0, -10, 2, 0, TAU); g.fill();
+          g.fillStyle = "#ffcb05"; g.fillRect(-2.2, -12.6, 4.4, 1.6);
+          const pa = Math.sin(t * 3 + seed) * 0.6;
+          g.save(); g.translate(0, -6); g.rotate(pa);
+          g.fillStyle = "#c9cbd8"; g.fillRect(-10, -0.5, 20, 1);
+          g.fillStyle = "#17d4c8"; g.fillRect(-12, -1.5, 3, 3); g.fillRect(9, -1.5, 3, 3);
+          g.restore();
+          break;
+        }
+        case "swan": {
+          g.fillStyle = "#f3f0ff";
+          g.beginPath(); g.ellipse(-2, -5, L / 2, 6, 0, 0, TAU); g.fill();
+          g.beginPath(); g.moveTo(-L / 2, -6); g.lineTo(-L / 2 - 4, -12); g.lineTo(-L / 2 + 6, -8); g.fill();
+          g.strokeStyle = "#f3f0ff"; g.lineWidth = 3.4; g.lineCap = "round";
+          g.beginPath(); g.moveTo(L * 0.28, -6); g.quadraticCurveTo(L * 0.5, -14, L * 0.32, -22); g.stroke();
+          g.fillStyle = "#ff8a3d"; g.beginPath(); g.moveTo(L * 0.34, -23); g.lineTo(L * 0.34 + 5, -21.5); g.lineTo(L * 0.34, -20.5); g.fill();
+          g.fillStyle = "#1b1f36"; g.fillRect(L * 0.32, -23.5, 1.2, 1.2);
+          // two riders pedalling
+          g.fillStyle = "#4c8dff"; g.fillRect(-7, -14, 4, 5);
+          g.fillStyle = "#ff5aa8"; g.fillRect(-1, -14, 4, 5);
+          g.fillStyle = "#e0b48c"; g.fillRect(-6.5, -17, 3, 3); g.fillRect(-0.5, -17, 3, 3);
+          break;
+        }
+        case "dj": {
+          // the WAGMI party barge
+          hull("#0f0e28", 6, 6);
+          g.fillStyle = "#1e1b4a"; g.fillRect(-L / 2 + 2, -10, L - 8, 4);
+          g.fillStyle = "#05040f"; g.fillRect(-12, -26, 24, 9);
+          g.font = "900 7px Inconsolata, monospace"; g.textAlign = "center"; g.textBaseline = "middle";
+          g.fillStyle = ["#ff5aa8", "#17d4c8", "#ffcb05"][Math.floor(t * 2) % 3]; txt("WAGMI", 0, -21.5);
+          g.fillStyle = "#3a3668"; g.fillRect(-12, -17, 1.5, 7); g.fillRect(10.5, -17, 1.5, 7);
+          // speakers + dancers bouncing to the beat
+          g.fillStyle = "#1b1f36"; g.fillRect(-L / 2 + 4, -18, 6, 8); g.fillRect(L / 2 - 14, -18, 6, 8);
+          g.fillStyle = "#3a3668"; g.beginPath(); g.arc(-L / 2 + 7, -14, 2, 0, TAU); g.arc(L / 2 - 11, -14, 2, 0, TAU); g.fill();
+          const beat = Math.abs(Math.sin(t * 7));
+          const cols = ["#ffcb05", "#ff5aa8", "#3ddc84", "#4c8dff", "#a78bfa"];
+          for (let i = 0; i < 5; i++) {
+            const dx = -14 + i * 7, hop = (i % 2 ? beat : 1 - beat) * 2.5;
+            g.fillStyle = cols[i]; g.fillRect(dx, -15 - hop, 3, 5);
+            g.fillStyle = "#e0b48c"; g.fillRect(dx + 0.5, -18 - hop, 2, 2.5);
+            if (i % 2 === 0) { g.fillStyle = cols[i]; g.fillRect(dx - 1, -19 - hop, 1, 3); g.fillRect(dx + 3, -19 - hop, 1, 3); }
+          }
+          // party beams
+          g.globalCompositeOperation = "lighter";
+          for (let i = 0; i < 3; i++) {
+            const a = -Math.PI / 2 + Math.sin(t * 1.4 + i * 2) * 0.7;
+            g.strokeStyle = rgba(cols[i + 1], 0.22); g.lineWidth = 2;
+            g.beginPath(); g.moveTo(-6 + i * 6, -26); g.lineTo(-6 + i * 6 + Math.cos(a) * 50, -26 + Math.sin(a) * 50); g.stroke();
+          }
+          g.globalCompositeOperation = "source-over";
+          break;
+        }
+        case "jetski": {
+          g.fillStyle = "#17d4c8";
+          g.beginPath(); g.moveTo(-L / 2, -4); g.lineTo(L / 2, -2); g.lineTo(L / 2 - 3, 1); g.lineTo(-L / 2, 1); g.closePath(); g.fill();
+          g.fillStyle = "#ffcb05"; g.fillRect(-2, -10, 3, 6);
+          g.fillStyle = "#e0b48c"; g.fillRect(-1.5, -13, 2, 2.5);
+          g.fillStyle = "rgba(255,255,255,0.65)";
+          for (let i = 0; i < 10; i++) g.fillRect(-L / 2 - 2 - i * 2.6, -1 - Math.abs(Math.sin(t * 12 + i * 1.3)) * (6 - i * 0.4), 1.4, 1.4);
+          break;
+        }
+        case "sub": {
+          // just a periscope, peeking
+          const up = Math.max(0, Math.sin(t * 0.5 + seed)) * 10;
+          g.fillStyle = "#3a3668"; g.fillRect(-1, -up, 2, up + 2);
+          g.fillRect(-1, -up - 2, 5, 2.5);
+          g.fillStyle = "#17d4c8"; g.fillRect(3, -up - 1.8, 1.4, 1.8);
+          g.strokeStyle = "rgba(220,215,255,0.35)"; g.lineWidth = 0.8;
+          g.beginPath(); g.ellipse(0, 1.5, 5 + (t * 6 % 6), 1.2, 0, 0, TAU); g.stroke();
+          g.fillStyle = "rgba(220,215,255,0.4)";
+          for (let i = 0; i < 4; i++) g.fillRect(-6 - i * 5, 1 - ((t * 3 + i) % 2), 1.2, 1.2);
+          break;
+        }
+      }
+    }
+
+    drawSparks(g: Ctx, t: number, dt: number, below: boolean) {
+      if (!this.sparks.length) return;
+      g.save();
+      g.globalCompositeOperation = "lighter";
+      const keep: Spark[] = [];
+      for (const p of this.sparks) {
+        const age = t - p.born;
+        if (age > p.life) {
+          if (p.kind === "rocket" && !below) this.burstAt(p.x, p.ty ?? p.y, p.c, t);
+          continue;
+        }
+        keep.push(p);
+        if (below) continue; // advance once per frame, on the top pass
+        if (p.kind === "rocket") {
+          p.y += p.vy * dt;
+          g.fillStyle = p.c; g.fillRect(p.x - 1, p.y, 2, 4);
+          g.fillStyle = "rgba(255,240,200,0.4)"; g.fillRect(p.x - 0.5, p.y + 4, 1, 10);
+        } else if (p.kind === "spark") {
+          p.vy += 50 * dt; p.vx *= 0.985; p.vy *= 0.985;
+          p.x += p.vx * dt; p.y += p.vy * dt;
+          const a = 1 - age / p.life;
+          g.strokeStyle = rgba(p.c, a);
+          g.lineWidth = 1.4;
+          g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * 0.04, p.y - p.vy * 0.04); g.stroke();
+        } else if (p.kind === "flash") {
+          const a = 1 - age / p.life;
+          const r = 30;
+          const gr = g.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+          gr.addColorStop(0, rgba(p.c.startsWith("#") ? p.c : "#ffffff", 0.6 * a)); gr.addColorStop(1, rgba("#ffffff", 0));
+          g.fillStyle = gr; g.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+        } else if (p.kind === "cap") {
+          p.vy += 140 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+          g.globalCompositeOperation = "source-over";
+          g.save(); g.translate(p.x, p.y); g.rotate(age * 6);
+          g.fillStyle = "#1b1f36"; g.fillRect(-5, -1, 10, 2); g.fillRect(-2.5, 0, 5, 3);
+          g.fillStyle = "#ffcb05"; g.fillRect(3, 0, 1, 4);
+          g.restore();
+          g.globalCompositeOperation = "lighter";
+        }
+      }
+      if (!below) this.sparks = keep;
+      g.restore();
+    }
+
+    // hub labels ride on the buildings
+    placeTags() {
+      if (!this.hubEl || !this.tags.length) return;
+      const hr = this.hubEl.getBoundingClientRect();
+      const { s, ax, ay } = this.cam;
+      const sig = [Math.round(ax), Math.round(ay), s.toFixed(3), Math.round(hr.top)].join(":");
+      if (sig === this.tagSig) return;
+      this.tagSig = sig;
+      this.tags.forEach((a, i) => {
+        const r = this.roofs[i];
+        if (!r) return;
+        const lift = i === 1 ? 26 * this.k : 8;
+        const x = ax + s * r.x;
+        let y = ay + s * (r.y - lift);
+        // never let a label sit on the hero copy
+        const cr = this.copyRect;
+        if (cr && !this.mobile && s < 1.05 && x - 60 < cr.right) y = Math.max(y, cr.bottom - window.scrollY + 48);
+        a.style.left = `${x - hr.left}px`;
+        a.style.top = `${y - hr.top}px`;
+        // tags beside the hero open toward the city, not over the copy
+        a.classList.toggle("ctag--east", !!cr && !this.mobile && x - 130 < cr.right);
+        a.classList.add("is-placed");
+      });
+    }
+  }
+
+  let city: NeonCity | null = null;
+  document.addEventListener("astro:page-load", () => {
+    const root = document.querySelector<HTMLElement>("[data-world-neon]");
+    if (!root || document.documentElement.dataset.worldMode !== "neon") {
+      city?.destroy();
+      city = null;
+      return;
+    }
+    if (!city || city.root !== root) {
+      city?.destroy();
+      city = new NeonCity(root);
+    }
+    city.setPage();
+  });
+</script>
