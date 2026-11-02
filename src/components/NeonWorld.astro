@@ -786,11 +786,22 @@ import { BLOCKS } from "../lib/chain";
         g.fillStyle = gr;
         g.fillRect(x, y, w, h);
       };
-      const text = (s: string, x: number, y: number, size: number, col: string, glow = col) => {
+      const text = (s: string, x: number, y: number, size: number, col: string, glow = col, plate = true) => {
         g.save();
         g.font = `900 ${Math.round(size)}px Inconsolata, monospace`;
         g.textAlign = "center";
         g.textBaseline = "middle";
+        if (plate) {
+          // a dark sign plate so the lettering never fights the window grid
+          const tw = g.measureText(s).width;
+          const pw = tw + size * 0.9, ph = size * 1.35;
+          const px = x - pw / 2, py = y - ph / 2;
+          g.fillStyle = pal.light ? "rgba(20,16,52,0.9)" : "rgba(5,4,16,0.94)";
+          g.beginPath(); g.roundRect(px, py, pw, ph, Math.min(4, ph / 4)); g.fill();
+          g.strokeStyle = rgba(glow, 0.55); g.lineWidth = 1; g.stroke();
+          // and no window twinkles on top of it
+          this.twinkle = this.twinkle.filter((w) => w.x + w.w < px || w.x > px + pw || w.y + w.h < py || w.y > py + ph);
+        }
         g.shadowColor = glow;
         g.shadowBlur = 12;
         g.fillStyle = col;
@@ -941,7 +952,7 @@ import { BLOCKS } from "../lib/chain";
             // site fence + sign
             g.fillStyle = "#f6c445"; g.fillRect(x - 6, base - 20, w + 12, 13);
             g.fillStyle = "#1b1f36"; g.fillRect(x - 5, base - 19, w + 10, 11);
-            text("NEXT BLOCK", cx, base - 13.5, 7 * k + 3, "#f6c445");
+            text("NEXT BLOCK", cx, base - 13.5, 7 * k + 3, "#f6c445", "#f6c445", false);
             // crane mast + jib
             const mx = x + w + 12 * k;
             g.fillStyle = "#ffcb05";
