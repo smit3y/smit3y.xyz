@@ -1461,3 +1461,15 @@ html[data-walk="prev"] { --walk: -1; }
     transform: translateX(calc(var(--walk, 1) * 80px));
   }
 }
+
+/* the city hubs fill exactly one screen: the hero already carries the
+   socials, so the footer would only add a sliver of scroll */
+html:has(.cityhub) .site-footer {
+  display: none;
+}
+
+/* the film grain blends over everything; over an animated city that means
+   re-blending the whole screen every frame for an effect you can't see */
+html:has(.world) .grain-overlay {
+  display: none;
+}

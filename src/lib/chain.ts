@@ -17,32 +17,32 @@ export const BLOCKS: ChainBlock[] = [
   {
     id: "genesis", scene: "home", label: "About", title: "Genesis · Who I Am",
     tx: ["Economics & Psychology · University of Michigan '27", "Builder, basketball player, researcher"],
-    time: "block 0", href: "/about", cta: "About me",
+    time: "block 0", href: "/about/", cta: "About me",
   },
   {
     id: "coinbase", scene: "exchange", label: "Coinbase", title: "Incoming Institutional Analyst",
     tx: ["Coinbase · Sales, Trading & Prime Brokerage", "Sales, custody & staking requests"],
-    time: "incoming", href: "/experience/coinbase", cta: "Open block",
+    time: "incoming", href: "/experience/coinbase/", cta: "Open block",
   },
   {
     id: "research", scene: "research", label: "Research", title: "Research · Investment Theses",
     tx: ["The Shrinking Anchor · Ledger N3XT", "Equities, digital assets & DeFi"],
-    time: "Sep 2026", href: "/research", cta: "Research",
+    time: "Sep 2026", href: "/research/", cta: "Research",
   },
   {
     id: "sny", scene: "sny", label: "S&Y Scholars", title: "Co-Founder · S&Y Scholars",
     tx: ["Peer-to-peer college admissions consulting", "Winner · 2023 NYT College Essay Challenge"],
-    time: "2023 → present", href: "/sny", cta: "S&Y Scholars",
+    time: "2023 → present", href: "/sny/", cta: "S&Y Scholars",
   },
   {
     id: "arena", scene: "arena", label: "Michigan WBB", title: "Practice Player",
     tx: ["University of Michigan Women's Basketball", "Training with a D1 roster"],
-    time: "2023 → present", href: "/experience/michigan-wbb", cta: "Open block",
+    time: "2023 → present", href: "/experience/michigan-wbb/", cta: "Open block",
   },
   {
     id: "pending", scene: "pending", label: "What's next", title: "Pending",
     tx: ["Next block is still in the mempool", "Say gm"],
-    time: "mempool", href: "/next", cta: "What's next",
+    time: "mempool", href: "/next/", cta: "What's next",
   },
 ];
 

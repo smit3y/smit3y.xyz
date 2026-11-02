@@ -10,7 +10,7 @@ import CityHub from "../components/CityHub.astro";
   <script is:inline>
     // links to the old one-page site's sections (/#research …) open their pages
     (function () {
-      var to = { "#about": "/about", "#experience": "/experience", "#research": "/research", "#sny": "/sny" }[location.hash];
+      var to = { "#about": "/about/", "#experience": "/experience/", "#research": "/research/", "#sny": "/sny/" }[location.hash];
       if (to) location.replace(to);
     })();
   </script>

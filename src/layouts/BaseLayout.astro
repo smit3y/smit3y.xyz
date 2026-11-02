@@ -26,7 +26,7 @@ const {
   world = false,
   worldMode,
 } = Astro.props;
-const canonical = new URL(Astro.url.pathname, "https://smit3y.xyz");
+const canonical = new URL(Astro.url.pathname.replace(/\/?$/, "/"), "https://smit3y.xyz");
 ---
 
 <html lang="en" data-world-mode={worldMode}>

@@ -52,7 +52,7 @@ export const loadResearchEntries = (): ResearchEntry[] => {
         date: fm.date?.trim() || "",
         pdf: fm.pdf?.trim() || "",
         url,
-        href: url || `/research/${slug}`,
+        href: url || `/research/${slug}/`,
         badge: fm.badge?.trim() || "",
         order: typeof fm.order === "number" ? fm.order : null,
       };

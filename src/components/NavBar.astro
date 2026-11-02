@@ -6,10 +6,10 @@ const tickerItems = fallbackItems;
 const path = Astro.url.pathname.replace(/\/$/, "") || "/";
 const navItems = [
   { label: "Home", href: "/", match: (p: string) => p === "/" },
-  { label: "About", href: "/about", match: (p: string) => p === "/about" },
-  { label: "Research", href: "/research", match: (p: string) => p.startsWith("/research") },
-  { label: "Experience", href: "/experience", match: (p: string) => p.startsWith("/experience") },
-  { label: "S&Y", href: "/sny", match: (p: string) => p === "/sny" },
+  { label: "About", href: "/about/", match: (p: string) => p === "/about" },
+  { label: "Research", href: "/research/", match: (p: string) => p.startsWith("/research") },
+  { label: "Experience", href: "/experience/", match: (p: string) => p.startsWith("/experience") },
+  { label: "S&Y", href: "/sny/", match: (p: string) => p === "/sny" },
 ];
 const isClassic = path === "/classic";
 ---
@@ -149,10 +149,10 @@ const isClassic = path === "/classic";
 
   const matchers: Array<[string, (p: string) => boolean]> = [
     ["/", (p) => p === "/"],
-    ["/about", (p) => p === "/about"],
-    ["/research", (p) => p.startsWith("/research")],
-    ["/experience", (p) => p.startsWith("/experience")],
-    ["/sny", (p) => p === "/sny"],
+    ["/about/", (p) => p === "/about"],
+    ["/research/", (p) => p.startsWith("/research")],
+    ["/experience/", (p) => p.startsWith("/experience")],
+    ["/sny/", (p) => p === "/sny"],
   ];
 
   let pageAbort: AbortController | null = null;
@@ -164,14 +164,14 @@ const isClassic = path === "/classic";
 
     // "home" is whichever hub this visit uses (3D chain, pixel or neon city)
     const mode = document.documentElement.dataset.worldMode;
-    const hub = mode === "pixel" ? "/city" : "/";
+    const hub = mode === "pixel" ? "/city/" : "/";
     document.querySelectorAll<HTMLAnchorElement>("[data-nav-home]").forEach((a) => a.setAttribute("href", hub));
 
     // active nav item for the current page
     const path = location.pathname.replace(/\/$/, "") || "/";
     for (const link of document.querySelectorAll<HTMLAnchorElement>(".site-nav a")) {
       const m = matchers.find(([href]) => href === link.getAttribute("href"));
-      const active = link.hasAttribute("data-nav-home") ? path === hub : !!m && m[1](path);
+      const active = link.hasAttribute("data-nav-home") ? path === (hub.replace(/\/$/, "") || "/") : !!m && m[1](path);
       link.classList.toggle("is-active", active);
       if (active) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");

@@ -14,7 +14,7 @@ const { pageEntries, currentPage, totalPages } = getResearchPage(
 );
 const pageNumbers = Array.from({ length: totalPages }, (_, idx) => idx + 1);
 const pageHref = (page: number) =>
-  page === 1 ? "/research" : `/research/page/${page}`;
+  page === 1 ? "/research/" : `/research/page/${page}/`;
 ---
 
 <BlockPage index={2} title="Research | smit3y.xyz">

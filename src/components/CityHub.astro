@@ -49,7 +49,7 @@ const { mode } = Astro.props;
   .cityhub {
     position: relative;
     height: calc(100svh - var(--chrome-h, 5.6rem));
-    min-height: 30rem;
+    min-height: 26rem;
     /* the hero's soft glow may bleed past the screen edge; never let it widen the page */
     overflow-x: clip;
     pointer-events: none;
@@ -203,8 +203,7 @@ const { mode } = Astro.props;
     padding: 0.35rem 0.7rem 0.4rem;
     border: 1px solid color-mix(in srgb, var(--c, #8b5cf6) 70%, transparent);
     border-radius: 999px;
-    background: rgba(6, 6, 24, 0.82);
-    backdrop-filter: blur(6px);
+    background: rgba(6, 6, 24, 0.9);
     box-shadow: 0 0 18px color-mix(in srgb, var(--c, #8b5cf6) 35%, transparent);
     color: #f3f0ff;
     font: 700 0.78rem/1.1 Inconsolata, monospace;
@@ -268,8 +267,7 @@ const { mode } = Astro.props;
     margin: 0;
     padding: 0.4rem 0.75rem;
     border-radius: 6px;
-    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
-    backdrop-filter: blur(6px);
+    background: color-mix(in srgb, var(--bg-0) 86%, transparent);
     color: var(--text-sub);
     font: 700 0.72rem/1 Inconsolata, monospace;
     letter-spacing: 0.1em;
@@ -315,8 +313,7 @@ const { mode } = Astro.props;
       right: max(16px, env(safe-area-inset-right, 0px));
       padding: 0.75rem 0.9rem 0.9rem;
       border: 2px solid var(--border-6);
-      background: color-mix(in srgb, var(--bg-0) 78%, transparent);
-      backdrop-filter: blur(4px);
+      background: color-mix(in srgb, var(--bg-0) 88%, transparent);
     }
 
     .is-pixel .cityhub-copy::before {

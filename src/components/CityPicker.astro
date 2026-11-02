@@ -2,7 +2,7 @@
 // Floating switcher for comparing the 2D city prototypes side by side.
 const current = Astro.url.pathname.replace(/\/$/, "") || "/";
 const versions = [
-  { href: "/city", name: "Pixel Skyline", key: "A" },
+  { href: "/city/", name: "Pixel Skyline", key: "A" },
   { href: "/", name: "Neon Harbor", key: "D" },
 ];
 ---
@@ -11,7 +11,7 @@ const versions = [
   <span class="picker-label">2D drafts</span>
   {
     versions.map((v) => (
-      <a href={v.href} class:list={["picker-link", { "is-on": current === v.href }]} aria-current={current === v.href ? "page" : undefined}>
+      <a href={v.href} class:list={["picker-link", { "is-on": current === (v.href.replace(/\/$/, "") || "/") }]} aria-current={current === (v.href.replace(/\/$/, "") || "/") ? "page" : undefined}>
         <span class="picker-num">{v.key}</span>
         <span class="picker-name">{v.name}</span>
       </a>

@@ -352,7 +352,7 @@ const color = NODE_COLORS[index];
     const id = page.dataset.blockId ?? "";
     // "back" returns to whichever hub this visit came from
     const mode = document.documentElement.dataset.worldMode;
-    const hub = mode === "pixel" ? "/city" : "/";
+    const hub = mode === "pixel" ? "/city/" : "/";
     const city = mode === "pixel" || mode === "neon";
     page.dataset.back = hub;
     page.querySelectorAll<HTMLAnchorElement>(".bp-back, [data-rail-city]").forEach((a) => (a.href = hub));
